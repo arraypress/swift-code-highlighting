@@ -324,3 +324,19 @@ final class TreeSitterHighlighterTests: XCTestCase {
         XCTAssertNil(colorAt(s, stringStart), "the string literal is not an identifier — nothing bleeds into it")
     }
 }
+
+extension TreeSitterHighlighterTests {
+    /// Injection chunks of one language must merge into ascending, non-overlapping
+    /// ranges before feeding `Parser.includedRanges` — the combined-parse fix that
+    /// lets `<section>`…`</section>` pair across a PHP block between them.
+    func testMergeAscendingSortsAndUnionsInjectionRanges() {
+        let merged = TreeSitterHighlighter.mergeAscending([
+            NSRange(location: 40, length: 10),
+            NSRange(location: 0, length: 5),
+            NSRange(location: 5, length: 3),    // adjacent to the first — unions
+            NSRange(location: 42, length: 4),   // inside the 40..<50 range — unions
+        ])
+        XCTAssertEqual(merged, [NSRange(location: 0, length: 8), NSRange(location: 40, length: 10)])
+        XCTAssertEqual(TreeSitterHighlighter.mergeAscending([]), [])
+    }
+}

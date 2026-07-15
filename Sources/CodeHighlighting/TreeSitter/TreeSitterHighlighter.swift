@@ -395,28 +395,77 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         }
     }
 
+    /// All injection sites in `tree`, grouped by injected language and merged into
+    /// ascending, non-overlapping ranges. Grouping lets every chunk of the same
+    /// language parse as ONE document via `Parser.includedRanges`, so constructs
+    /// split across chunks (e.g. `<section>`…`</section>` around a PHP block, whose
+    /// HTML arrives as separate `text` nodes) still pair instead of parsing as errors.
+    private static func injectionSites(_ injQuery: Query, tree: MutableTree, ns: NSString) -> [(name: String, ranges: [NSRange])] {
+        var grouped: [String: [NSRange]] = [:]
+        var order: [String] = []
+        let cursor = injQuery.execute(in: tree)
+        while let match = cursor.next() {
+            guard let named = match.injection(with: { r, _ in NSMaxRange(r) <= ns.length ? ns.substring(with: r) : nil }),
+                  let content = match.captures(named: "injection.content").first else { continue }
+            let r = content.range
+            guard r.length > 0, NSMaxRange(r) <= ns.length else { continue }
+            if grouped[named.name] == nil { order.append(named.name) }
+            grouped[named.name, default: []].append(r)
+        }
+        return order.map { name in (name, mergeAscending(grouped[name]!)) }
+    }
+
+    /// Sorts `ranges` ascending and unions overlapping/adjacent ones — tree-sitter
+    /// requires included ranges to be ascending and non-overlapping.
+    static func mergeAscending(_ ranges: [NSRange]) -> [NSRange] {
+        var merged: [NSRange] = []
+        for r in ranges.sorted(by: { $0.location < $1.location }) {
+            if let last = merged.last, NSMaxRange(last) >= r.location {
+                merged[merged.count - 1] = last.union(r)
+            } else {
+                merged.append(r)
+            }
+        }
+        return merged
+    }
+
+    /// Parses the whole of `ns` restricted to `ranges` — one combined document per
+    /// injected language. Byte offsets are UTF-16 index × 2 (SwiftTreeSitter parses
+    /// UTF-16LE); points come from a single forward newline scan (column in bytes).
+    private static func combinedParse(_ sub: Grammar, ns: NSString, ranges: [NSRange]) -> MutableTree? {
+        let p = Parser()
+        try? p.setLanguage(sub.language)
+        var row = 0, lastNL = -1, scan = 0
+        func point(at idx: Int) -> Point {
+            while scan < idx {
+                if ns.character(at: scan) == 0x0A { row += 1; lastNL = scan }
+                scan += 1
+            }
+            return Point(row: row, column: (idx - lastNL - 1) * 2)
+        }
+        p.includedRanges = ranges.map { r in
+            let start = point(at: r.location), end = point(at: NSMaxRange(r))
+            return TSRange(points: start..<end, bytes: UInt32(r.location * 2)..<UInt32(NSMaxRange(r) * 2))
+        }
+        return p.parse(ns as String)
+    }
+
     /// Recursively highlights embedded languages (CSS in `<style>`, JS in
-    /// `<script>`, HTML in PHP templates, …), depth-limited.
+    /// `<script>`, HTML in PHP templates, …), depth-limited. All chunks of one
+    /// injected language share a single combined parse (see `injectionSites`);
+    /// capture ranges therefore stay absolute within `ns` and `offset` is unchanged.
     @MainActor
     private static func applyInjections(_ g: Grammar, tree: MutableTree, source ns: NSString,
                                         offset: Int, clip: NSRange, into storage: NSTextStorage, depth: Int) {
         guard depth < 3, let injQuery = g.injections else { return }
-        let cursor = injQuery.execute(in: tree)
-        while let match = cursor.next() {
-            guard let named = match.injection(with: { r, _ in NSMaxRange(r) <= ns.length ? ns.substring(with: r) : nil }),
-                  let content = match.captures(named: "injection.content").first,
-                  let sub = grammarForInjection(named.name) else { continue }
-            let r = content.range
-            guard r.length > 0, NSMaxRange(r) <= ns.length else { continue }
-            let absStart = offset + r.location
-            guard NSIntersectionRange(NSRange(location: absStart, length: r.length), clip).length > 0 else { continue }
-            let subText = ns.substring(with: r)
-            let subNS = subText as NSString
-            let p = Parser()
-            try? p.setLanguage(sub.language)
-            guard let subTree = p.parse(subText) else { continue }
-            applyQuery(sub.highlights, tree: subTree, source: subNS, offset: absStart, clip: clip, into: storage)
-            applyInjections(sub, tree: subTree, source: subNS, offset: absStart, clip: clip, into: storage, depth: depth + 1)
+        for site in injectionSites(injQuery, tree: tree, ns: ns) {
+            guard let sub = grammarForInjection(site.name) else { continue }
+            guard site.ranges.contains(where: {
+                NSIntersectionRange(NSRange(location: offset + $0.location, length: $0.length), clip).length > 0
+            }) else { continue }
+            guard let subTree = combinedParse(sub, ns: ns, ranges: site.ranges) else { continue }
+            applyQuery(sub.highlights, tree: subTree, source: ns, offset: offset, clip: clip, into: storage)
+            applyInjections(sub, tree: subTree, source: ns, offset: offset, clip: clip, into: storage, depth: depth + 1)
         }
     }
 
@@ -483,10 +532,17 @@ public final class TreeSitterHighlighter: CodeHighlighter {
     /// recursing into injections — the data behind `dumpCaptures`.
     @MainActor
     private static func collectWinners(_ g: Grammar, source: String, ns: NSString, offset: Int, lang: String, depth: Int,
+                                       ranges: [NSRange]? = nil,
                                        into winners: inout [String: (loc: Int, text: String, name: String, pattern: Int, lang: String)]) {
-        let parser = Parser()
-        try? parser.setLanguage(g.language)
-        guard let tree = parser.parse(source) else { return }
+        let tree: MutableTree?
+        if let ranges {
+            tree = combinedParse(g, ns: ns, ranges: ranges)
+        } else {
+            let parser = Parser()
+            try? parser.setLanguage(g.language)
+            tree = parser.parse(source)
+        }
+        guard let tree else { return }
         let cursor = g.highlights.execute(in: tree)
         let resolving = ResolvingQueryCursor(cursor: cursor)
         resolving.prepare(with: { r, _ in NSMaxRange(r) <= ns.length ? ns.substring(with: r) : nil })
@@ -502,16 +558,10 @@ public final class TreeSitterHighlighter: CodeHighlighter {
             }
         }
         guard depth < 3, let injQuery = g.injections else { return }
-        let ic = injQuery.execute(in: tree)
-        while let match = ic.next() {
-            guard let named = match.injection(with: { r, _ in NSMaxRange(r) <= ns.length ? ns.substring(with: r) : nil }),
-                  let content = match.captures(named: "injection.content").first,
-                  let sub = grammarForInjection(named.name) else { continue }
-            let r = content.range
-            guard r.length > 0, NSMaxRange(r) <= ns.length else { continue }
-            let subText = ns.substring(with: r)
-            collectWinners(sub, source: subText, ns: subText as NSString,
-                           offset: offset + r.location, lang: named.name, depth: depth + 1, into: &winners)
+        for site in injectionSites(injQuery, tree: tree, ns: ns) {
+            guard let sub = grammarForInjection(site.name) else { continue }
+            collectWinners(sub, source: source, ns: ns, offset: offset,
+                           lang: site.name, depth: depth + 1, ranges: site.ranges, into: &winners)
         }
     }
 }
