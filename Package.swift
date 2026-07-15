@@ -67,7 +67,12 @@ let package = Package(
         ),
         .testTarget(
             name: "CodeHighlightingTests",
-            dependencies: ["CodeHighlighting"],
+            dependencies: [
+                "CodeHighlighting",
+                // Tests compile hand-written queries (Query/Parser) to exercise
+                // the tree-sitter path without the app's resource bundles.
+                .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
+            ],
             path: "Tests"
         ),
     ]

@@ -27,6 +27,8 @@ import TreeSitterDockerfile
 /// applies colors from the grammar's `highlights.scm` query. Correct across the
 /// whole file (no viewport gaps) and far more accurate than regex.
 public final class TreeSitterHighlighter: CodeHighlighter {
+    /// A loaded grammar: the language pointer plus its compiled highlight and
+    /// (optional) injection queries.
     private struct Grammar { let language: SwiftTreeSitter.Language; let highlights: Query; let injections: Query? }
 
     /// Grammars we bundle. Add a package + a line here to support a language.
@@ -107,8 +109,20 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         }
     }
 
+    /// Whether a grammar (with its query bundle) is loaded for `language` —
+    /// i.e. whether `init?(language:)` would succeed. When false, fall back to
+    /// the regex ``SyntaxHighlighter``.
     public static func supports(_ language: CodeLanguage.Language) -> Bool { grammars[language] != nil }
+
+    /// How many grammars loaded successfully (a startup sanity check: 0 usually
+    /// means the `.bundle` query resources weren't shipped next to the executable).
     public static var loadedCount: Int { grammars.count }
+
+    /// The loaded tree-sitter language object for `language`. Internal for tests
+    /// (lets them compile hand-written queries against a bundled grammar).
+    static func tsLanguage(for language: CodeLanguage.Language) -> SwiftTreeSitter.Language? {
+        grammars[language]?.language
+    }
 
     /// Smallest syntax node whose range is strictly larger than `selection`
     /// (for Expand Selection). Returns nil if unavailable.
@@ -128,6 +142,7 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         return (forward ? node.nextNamedSibling : node.previousNamedSibling)?.range
     }
 
+    /// The smallest syntax node covering `selection` (a fresh parse of `text`).
     private static func nodeSpanning(_ selection: NSRange, text: String, language: CodeLanguage.Language) -> Node? {
         guard let g = grammars[language] else { return nil }
         let parser = Parser()
@@ -142,6 +157,7 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         return root.descendant(in: UInt32(byteStart)..<UInt32(byteStart + byteLen))
     }
 
+    /// Compiled symbol queries, cached per language (guarded by `symbolCacheLock`).
     private static var symbolQueryCache: [CodeLanguage.Language: Query] = [:]
     private static let symbolCacheLock = NSLock()
 
@@ -286,12 +302,18 @@ public final class TreeSitterHighlighter: CodeHighlighter {
     private let grammar: Grammar
     private let parser = Parser()
 
+    /// Creates a highlighter for `language`, or nil when no grammar is loaded
+    /// for it (check with ``supports(_:)``; fall back to ``SyntaxHighlighter``).
     public init?(language: CodeLanguage.Language) {
         guard let g = Self.grammars[language] else { return nil }
         grammar = g
         try? parser.setLanguage(g.language)
     }
 
+    /// Reparses the whole buffer and recolors the lines that intersect
+    /// `editedRange` (expanded to whole lines), including injected languages.
+    /// - Note: Must be called on the main thread (the resolving query cursor is
+    ///   main-actor-isolated). Only `.foregroundColor` is touched, never `.font`.
     public func highlight(_ storage: NSTextStorage, in editedRange: NSRange) {
         let full = NSRange(location: 0, length: storage.length)
         let ns = storage.string as NSString
@@ -311,11 +333,17 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         }
     }
 
-    /// Hex color literals get a small swatch drawn beside them (in DiffLayoutManager).
+    /// Whether hosts should draw a small color swatch beside hex color literals.
+    /// A rendering preference for the host editor — this class never draws chips itself.
     public static var showColorChips = true
+
+    /// Matches `#RGB` / `#RRGGBB` / `#RRGGBBAA` hex color literals, for hosts
+    /// locating chip positions.
     public static let colorRegex = try? NSRegularExpression(
         pattern: "#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3})\\b")
 
+    /// Parses a `#RGB` / `#RRGGBB` / `#RRGGBBAA` literal (leading `#` optional)
+    /// into an sRGB color; nil when the string isn't a valid hex color.
     public static func colorFromHex(_ hex: String) -> NSColor? {
         var s = Substring(hex)
         if s.hasPrefix("#") { s = s.dropFirst() }
@@ -335,9 +363,10 @@ public final class TreeSitterHighlighter: CodeHighlighter {
     /// Runs a highlights query over `tree` (parsed from `source`), resolving
     /// predicates and applying colors offset into `storage` by `offset`, clipped
     /// to `clip`. Later query patterns win over generic catch-alls.
+    /// Internal (not private) so tests can drive it with a hand-built query.
     @MainActor
-    private static func applyQuery(_ query: Query, tree: MutableTree, source ns: NSString,
-                                   offset: Int, clip: NSRange, into storage: NSTextStorage) {
+    static func applyQuery(_ query: Query, tree: MutableTree, source ns: NSString,
+                           offset: Int, clip: NSRange, into storage: NSTextStorage) {
         let cursor = query.execute(in: tree)
         let resolving = ResolvingQueryCursor(cursor: cursor)
         resolving.prepare(with: { r, _ in NSMaxRange(r) <= ns.length ? ns.substring(with: r) : nil })
@@ -350,6 +379,16 @@ public final class TreeSitterHighlighter: CodeHighlighter {
                 hits.append((NSRange(location: offset + r.location, length: r.length), capture.patternIndex, color))
             }
         }
+        apply(hits: hits, clip: clip, into: storage)
+    }
+
+    /// Applies collected capture hits: later `patternIndex` wins (hits are applied
+    /// in ascending pattern order so later patterns overwrite earlier ones), and
+    /// every range is clipped to `clip` — a hit partially outside is trimmed, one
+    /// fully outside is dropped. Internal (not private) so tests can exercise the
+    /// precedence + clamping math with precomputed hits.
+    static func apply(hits: [(range: NSRange, pattern: Int, color: NSColor)],
+                      clip: NSRange, into storage: NSTextStorage) {
         for hit in hits.sorted(by: { $0.pattern < $1.pattern }) {
             let r = NSIntersectionRange(hit.range, clip)
             if r.length > 0 { storage.addAttribute(.foregroundColor, value: hit.color, range: r) }
@@ -440,6 +479,8 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         }
     }
 
+    /// Collects the winning (highest-`patternIndex`) capture per token span,
+    /// recursing into injections — the data behind `dumpCaptures`.
     @MainActor
     private static func collectWinners(_ g: Grammar, source: String, ns: NSString, offset: Int, lang: String, depth: Int,
                                        into winners: inout [String: (loc: Int, text: String, name: String, pattern: Int, lang: String)]) {
@@ -476,5 +517,6 @@ public final class TreeSitterHighlighter: CodeHighlighter {
 }
 
 extension NSRange {
+    /// The smallest range covering both `self` and `other` (`NSUnionRange`).
     func union(_ other: NSRange) -> NSRange { NSUnionRange(self, other) }
 }

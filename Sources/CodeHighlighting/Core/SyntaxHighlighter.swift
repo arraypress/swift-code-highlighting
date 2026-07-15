@@ -11,7 +11,14 @@
 import AppKit
 import CodeLanguage
 
+/// Dependency-light regex highlighter: per-language rule tables for the common
+/// languages, plus a `HighlightFamily` fallback so every language `CodeLanguage`
+/// recognizes gets sensible coloring — no grammars or bundles required.
+///
+/// Use it as the fallback when ``TreeSitterHighlighter`` has no grammar for the
+/// language (`TreeSitterHighlighter.supports(_:)` is false).
 public final class SyntaxHighlighter: CodeHighlighter {
+    /// A compiled pattern paired with the token role it paints.
     private typealias Rule = (regex: NSRegularExpression, kind: TokenKind)
 
     // Rules are grouped so precedence is correct regardless of authoring order:
@@ -25,6 +32,9 @@ public final class SyntaxHighlighter: CodeHighlighter {
     private let commentRules: [Rule]
     private let colors: TokenColorProviding
 
+    /// Builds the rule tables for `language`, painting with `colors`.
+    /// Never fails: an unknown language falls back to its family's rules
+    /// (worst case, plain text gets no rules and stays uncolored).
     public init(language: Language, colors: TokenColorProviding) {
         self.colors = colors
         var code: [Rule] = []
@@ -43,6 +53,9 @@ public final class SyntaxHighlighter: CodeHighlighter {
         commentRules = comments
     }
 
+    /// Recolors the lines that intersect `editedRange` (expanded to whole lines).
+    /// Only the `.foregroundColor` attribute is touched — never `.font`, which
+    /// would invalidate layout on every keystroke.
     public func highlight(_ storage: NSTextStorage, in editedRange: NSRange) {
         let string = storage.string as NSString
         guard string.length > 0 else { return }
@@ -67,6 +80,7 @@ public final class SyntaxHighlighter: CodeHighlighter {
         applyStringsAndComments(to: storage, in: text, range: range)
     }
 
+    /// Paints every match of `rules` within `range`, in table order.
     private func apply(_ rules: [Rule], to storage: NSTextStorage, in text: String, range: NSRange) {
         for rule in rules {
             let color = colors.color(for: rule.kind)
@@ -114,6 +128,8 @@ public final class SyntaxHighlighter: CodeHighlighter {
 
     // MARK: - Rule tables
 
+    /// The (pattern, kind) rule table for `lang`; languages without a dedicated
+    /// table fall through to `familyDefs(for:)`.
     private static func buildDefs(for lang: Language) -> [(String, TokenKind)] {
         switch lang {
         case .swift:

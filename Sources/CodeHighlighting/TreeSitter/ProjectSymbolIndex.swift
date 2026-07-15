@@ -3,10 +3,15 @@ import CodeLanguage
 
 /// A definition found somewhere in the project.
 public struct DefLocation {
+    /// The file the definition lives in.
     public let url: URL
+    /// The identifier as written at the definition site.
     public let name: String
+    /// What kind of definition this is.
     public let kind: SymbolKind
-    public let range: NSRange   // name range within that file
+    /// The name identifier's range within that file.
+    public let range: NSRange
+    /// 1-based line of the definition.
     public let line: Int
 }
 
@@ -16,16 +21,32 @@ public struct DefLocation {
 public final class ProjectSymbolIndex {
     private var defs: [String: [DefLocation]] = [:]
     private var fileNames: [String: Set<String>] = [:]   // file path → the names it defines
+    /// Whether the initial `build(root:)` has completed and installed its results.
+    /// `updateFile(_:)` is a no-op until this is true.
     public private(set) var isBuilt = false
     private var generation = 0   // bumped by build()/invalidate() so a superseded build's results are discarded
     private let queue = DispatchQueue(label: "sidewatch.symbolindex", qos: .userInitiated)
 
+    /// Creates an empty index; call `build(root:)` to populate it.
     public init() {}
 
+    /// Directory names never descended into during a build.
     private static let skipDirs: Set<String> = [
         ".git", ".svn", ".hg", "node_modules", ".build", ".swiftpm", "Pods",
         "DerivedData", "dist", "build", "__pycache__", ".next", ".cache", "vendor",
     ]
+
+    /// A path key that stays stable across the file's deletion. `standardizedFileURL`
+    /// alone is existence-dependent on macOS (`/private/var/...` is only collapsed
+    /// to `/var/...` while the path exists), so a just-deleted file's key would
+    /// drift and `updateFile` would fail to drop its stale definitions. Resolving
+    /// symlinks on the parent directory (which still exists after the delete)
+    /// yields the same key before and after. Internal for tests.
+    static func canonicalPath(for url: URL) -> String {
+        let u = url.standardizedFileURL
+        return u.deletingLastPathComponent().resolvingSymlinksInPath()
+            .appendingPathComponent(u.lastPathComponent).path
+    }
 
     /// (Re)builds the whole index from `root`. `completion` runs on the main queue.
     /// A later `build()` or `invalidate()` supersedes an in-flight build: the
@@ -55,7 +76,7 @@ public final class ProjectSymbolIndex {
                             DefLocation(url: url, name: s.name, kind: s.kind, range: s.range, line: s.line))
                         names.insert(s.name)
                     }
-                    if !names.isEmpty { files[url.standardizedFileURL.path] = names }
+                    if !names.isEmpty { files[Self.canonicalPath(for: url)] = names }
                     count += 1
                     if count > 5000 { break }   // safety cap for very large trees
                 }
@@ -75,7 +96,7 @@ public final class ProjectSymbolIndex {
     /// Cheap enough to call on every disk change. No-op until the full build ran.
     public func updateFile(_ url: URL) {
         guard isBuilt else { return }
-        let path = url.standardizedFileURL.path
+        let path = Self.canonicalPath(for: url)
         queue.async { [weak self] in
             var newDefs: [DefLocation] = []
             var names = Set<String>()
@@ -94,7 +115,7 @@ public final class ProjectSymbolIndex {
                 guard let self, self.isBuilt else { return }
                 if let old = self.fileNames[path] {
                     for n in old {
-                        self.defs[n]?.removeAll { $0.url.standardizedFileURL.path == path }
+                        self.defs[n]?.removeAll { Self.canonicalPath(for: $0.url) == path }
                         if self.defs[n]?.isEmpty == true { self.defs[n] = nil }
                     }
                 }
@@ -104,6 +125,9 @@ public final class ProjectSymbolIndex {
         }
     }
 
+    /// All known definitions of `name` across the project (empty before the
+    /// build completes, or when the name is undefined).
+    /// - Note: Read on the main queue — the index installs its updates there.
     public func definitions(of name: String) -> [DefLocation] { defs[name] ?? [] }
 
     /// Drop the index (e.g. on a project-folder switch) so it rebuilds fresh.

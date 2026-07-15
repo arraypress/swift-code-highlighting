@@ -3,12 +3,17 @@ import CodeLanguage
 
 /// A definition found in a source file (function, class, method, …).
 public struct Symbol {
+    /// The identifier as written at the definition site.
     public let name: String
+    /// What kind of definition this is.
     public let kind: SymbolKind
-    public let range: NSRange   // the name identifier's range (for jump + scroll)
-    public let line: Int        // 1-based line of the definition
+    /// The name identifier's range in the file (for jump + scroll).
+    public let range: NSRange
+    /// 1-based line of the definition.
+    public let line: Int
 }
 
+/// The kind of definition a ``Symbol`` represents. `class` maps to ``type``.
 public enum SymbolKind: String {
     case function, method, type, structure, enumeration, interface, module, property, constant, variable
 
@@ -60,6 +65,8 @@ public enum SymbolKind: String {
 /// yields no symbols for that language — graceful. Capture names map to
 /// `SymbolKind` via `SymbolKind(capture:)`.
 public enum SymbolQueries {
+    /// The query source per supported language. A language absent here yields
+    /// no symbols (and `ProjectSymbolIndex` skips its files entirely).
     public static let sources: [Language: String] = [
         .javascript: js,
         .typescript: ts,

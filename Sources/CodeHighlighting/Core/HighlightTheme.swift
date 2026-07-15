@@ -26,7 +26,10 @@ public enum HighlightTheme {
 /// A neutral fallback color provider, so highlighting is sensible before a theme
 /// is installed.
 public struct DefaultTokenColors: TokenColorProviding {
+    /// Creates the neutral system-color provider.
     public init() {}
+
+    /// A fixed system color per token role.
     public func color(for kind: TokenKind) -> NSColor {
         switch kind {
         case .comment:  return .systemGray
@@ -40,5 +43,6 @@ public struct DefaultTokenColors: TokenColorProviding {
         case .property: return .systemIndigo
         }
     }
+    /// The default text color (`labelColor`, so it tracks light/dark mode).
     public var foreground: NSColor { .labelColor }
 }
