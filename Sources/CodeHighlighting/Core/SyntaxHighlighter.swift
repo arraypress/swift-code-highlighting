@@ -15,8 +15,11 @@ public final class SyntaxHighlighter: CodeHighlighter {
     private typealias Rule = (regex: NSRegularExpression, kind: TokenKind)
 
     // Rules are grouped so precedence is correct regardless of authoring order:
-    // code first, then strings, then comments — so comments win over everything
-    // and strings win over code (a keyword inside a string/comment stays quiet).
+    // code rules apply first, then strings and comments are resolved together in
+    // one left-to-right scan where the earliest-starting match wins its whole
+    // span — so a keyword inside a string/comment stays quiet, a comment marker
+    // inside a string ("https://…") can't repaint the string, and a quote inside
+    // a comment can't start a string.
     private let codeRules: [Rule]
     private let stringRules: [Rule]
     private let commentRules: [Rule]
@@ -61,8 +64,7 @@ public final class SyntaxHighlighter: CodeHighlighter {
 
         let text = storage.string
         apply(codeRules, to: storage, in: text, range: range)
-        apply(stringRules, to: storage, in: text, range: range)
-        apply(commentRules, to: storage, in: text, range: range)
+        applyStringsAndComments(to: storage, in: text, range: range)
     }
 
     private func apply(_ rules: [Rule], to storage: NSTextStorage, in text: String, range: NSRange) {
@@ -72,6 +74,41 @@ public final class SyntaxHighlighter: CodeHighlighter {
                 guard let r = match?.range else { return }
                 storage.addAttribute(.foregroundColor, value: color, range: r)
             }
+        }
+    }
+
+    /// Strings and comments must be resolved together: applying one group after
+    /// the other let a comment marker inside a string literal (`"https://…"`,
+    /// `'a--b'`) repaint the rest of the line as a comment, and vice versa.
+    /// This walks the range once, left to right, always accepting the
+    /// earliest-starting match (longest on a tie) and re-searching any rule
+    /// whose next match overlapped an already-accepted span.
+    private func applyStringsAndComments(to storage: NSTextStorage, in text: String, range: NSRange) {
+        let rules = stringRules + commentRules
+        guard !rules.isEmpty else { return }
+        let end = NSMaxRange(range)
+        var pos = range.location
+        // Cached next match per rule: nil = needs (re)searching from `pos`;
+        // location == NSNotFound = the rule has no further matches.
+        var next = [NSRange?](repeating: nil, count: rules.count)
+        while pos < end {
+            var best: (range: NSRange, kind: TokenKind)?
+            for i in rules.indices {
+                if let cached = next[i], cached.location == NSNotFound { continue }
+                if next[i] == nil || next[i]!.location < pos {
+                    let found = rules[i].regex
+                        .firstMatch(in: text, options: [], range: NSRange(location: pos, length: end - pos))?.range
+                    next[i] = (found?.length ?? 0) > 0 ? found : NSRange(location: NSNotFound, length: 0)
+                }
+                guard let m = next[i], m.location != NSNotFound else { continue }
+                if best == nil || m.location < best!.range.location
+                    || (m.location == best!.range.location && m.length > best!.range.length) {
+                    best = (m, rules[i].kind)
+                }
+            }
+            guard let win = best else { break }
+            storage.addAttribute(.foregroundColor, value: colors.color(for: win.kind), range: win.range)
+            pos = NSMaxRange(win.range)
         }
     }
 

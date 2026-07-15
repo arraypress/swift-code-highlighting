@@ -17,7 +17,7 @@ public final class ProjectSymbolIndex {
     private var defs: [String: [DefLocation]] = [:]
     private var fileNames: [String: Set<String>] = [:]   // file path → the names it defines
     public private(set) var isBuilt = false
-    private var building = false
+    private var generation = 0   // bumped by build()/invalidate() so a superseded build's results are discarded
     private let queue = DispatchQueue(label: "sidewatch.symbolindex", qos: .userInitiated)
 
     public init() {}
@@ -28,9 +28,12 @@ public final class ProjectSymbolIndex {
     ]
 
     /// (Re)builds the whole index from `root`. `completion` runs on the main queue.
+    /// A later `build()` or `invalidate()` supersedes an in-flight build: the
+    /// superseded build still calls its completion, but its results are discarded —
+    /// so a project switch can never install the previous project's index.
     public func build(root: URL, completion: (() -> Void)? = nil) {
-        guard !building else { return }
-        building = true
+        generation += 1
+        let gen = generation
         queue.async { [weak self] in
             guard let self else { return }
             var map: [String: [DefLocation]] = [:]
@@ -58,10 +61,11 @@ public final class ProjectSymbolIndex {
                 }
             }
             DispatchQueue.main.async {
-                self.defs = map
-                self.fileNames = files
-                self.isBuilt = true
-                self.building = false
+                if self.generation == gen {   // still the newest request → install
+                    self.defs = map
+                    self.fileNames = files
+                    self.isBuilt = true
+                }
                 completion?()
             }
         }
@@ -103,5 +107,6 @@ public final class ProjectSymbolIndex {
     public func definitions(of name: String) -> [DefLocation] { defs[name] ?? [] }
 
     /// Drop the index (e.g. on a project-folder switch) so it rebuilds fresh.
-    public func invalidate() { defs = [:]; fileNames = [:]; isBuilt = false }
+    /// Also supersedes any in-flight build so its stale results are discarded.
+    public func invalidate() { generation += 1; defs = [:]; fileNames = [:]; isBuilt = false }
 }

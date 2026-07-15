@@ -190,7 +190,7 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         }
         signature = signature.trimmingCharacters(in: .whitespaces)
         let mono = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
-        return (sym.kind, attributedSnippet(signature, language: language, font: mono), docComment(above: lineRange.location, in: ns))
+        return (sym.kind, attributedSnippet(signature, language: language, font: mono), docComment(above: lineRange.location, in: ns, language: language))
     }
 
     /// Syntax-highlights a short code snippet (e.g. a hover signature) into an
@@ -236,17 +236,21 @@ public final class TreeSitterHighlighter: CodeHighlighter {
     }
 
     /// Contiguous comment lines immediately above `location` (a doc block).
-    private static func docComment(above location: Int, in ns: NSString) -> String {
+    /// The recognized markers come from `language`'s own comment tokens, so a
+    /// C-family `#include`/`#define` line (not a comment there) or a shebang is
+    /// never absorbed as documentation. Internal for tests.
+    static func docComment(above location: Int, in ns: NSString, language: CodeLanguage.Language) -> String {
+        let markers = docMarkers(for: language)
+        guard !markers.isEmpty else { return "" }
         var lines: [String] = []
         var idx = location
-        // "*" last among the block markers so "/**", "/*", "*/" match first.
-        let markers = ["///", "//", "/**", "/*", "*/", "*", "#", "--"]
         while idx > 0 {
             let prev = ns.lineRange(for: NSRange(location: idx - 1, length: 0))
             var raw = ns.substring(with: prev)
             while raw.hasSuffix("\n") || raw.hasSuffix("\r") { raw.removeLast() }
             let afterIndent = raw.drop { $0 == " " || $0 == "\t" }   // indentation before the marker
             guard let marker = markers.first(where: { afterIndent.hasPrefix($0) }) else { break }
+            if marker == "#", afterIndent.hasPrefix("#!") { break }   // shebang, not a doc line
             var content = String(afterIndent.dropFirst(marker.count))
             if content.hasPrefix(" ") { content.removeFirst() }   // just the conventional space after the marker
             if content.hasSuffix("*/") { content = String(content.dropLast(2)) }
@@ -257,6 +261,26 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         while lines.first?.trimmingCharacters(in: .whitespaces).isEmpty == true { lines.removeFirst() }
         while lines.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { lines.removeLast() }
         return lines.joined(separator: "\n")
+    }
+
+    /// Doc-comment markers for `language`, derived from its own comment tokens
+    /// (so '#' is a marker for Python/Ruby/Bash but never for C-family files).
+    /// "*" is last among the block markers so "/**", "/*", "*/" match first.
+    private static func docMarkers(for language: CodeLanguage.Language) -> [String] {
+        var markers: [String] = []
+        if let line = language.lineCommentToken {
+            if line == "//" { markers.append("///") }   // doc variants of the plain token
+            if line == "--" { markers.append("---") }
+            markers.append(line)
+        }
+        if let block = language.blockComment {
+            if block.open == "/*" {
+                markers += ["/**", "/*", "*/", "*"]
+            } else {
+                markers += [block.open, block.close]
+            }
+        }
+        return markers
     }
 
     private let grammar: Grammar
