@@ -130,8 +130,18 @@ public final class TreeSitterHighlighter: CodeHighlighter {
 
     /// Smallest syntax node whose range is strictly larger than `selection`
     /// (for Expand Selection). Returns nil if unavailable.
+    /// - Important: performs a fresh full parse of `text`; on big documents
+    ///   prefer ``HighlightSession/enclosingNodeRange(selection:text:)``, which
+    ///   walks the session's cached tree instead.
     public static func enclosingNodeRange(selection: NSRange, text: String, language: CodeLanguage.Language) -> NSRange? {
-        guard let node = nodeSpanning(selection, text: text, language: language) else { return nil }
+        guard let root = freshParseRoot(text, language: language) else { return nil }
+        return enclosingNodeRange(selection: selection, ns: text as NSString, root: root)
+    }
+
+    /// Tree-walk half of Expand Selection, against an already-parsed `root`.
+    /// Internal so ``HighlightSession`` reuses it with its cached tree.
+    static func enclosingNodeRange(selection: NSRange, ns: NSString, root: Node) -> NSRange? {
+        guard let node = nodeSpanning(selection, ns: ns, root: root) else { return nil }
         var n = node
         while n.range.length <= selection.length {
             guard let p = n.parent else { return nil }
@@ -141,18 +151,25 @@ public final class TreeSitterHighlighter: CodeHighlighter {
     }
 
     /// Range of the next/previous named sibling of the node at `selection`.
+    /// - Important: performs a fresh full parse of `text`; on big documents
+    ///   prefer ``HighlightSession/siblingRange(of:text:forward:)``.
     public static func siblingRange(of selection: NSRange, text: String, language: CodeLanguage.Language, forward: Bool) -> NSRange? {
-        guard let node = nodeSpanning(selection, text: text, language: language) else { return nil }
+        guard let root = freshParseRoot(text, language: language) else { return nil }
+        guard let node = nodeSpanning(selection, ns: text as NSString, root: root) else { return nil }
         return (forward ? node.nextNamedSibling : node.previousNamedSibling)?.range
     }
 
-    /// The smallest syntax node covering `selection` (a fresh parse of `text`).
-    private static func nodeSpanning(_ selection: NSRange, text: String, language: CodeLanguage.Language) -> Node? {
+    /// Root node of one fresh full parse of `text`, or nil when no grammar is loaded.
+    private static func freshParseRoot(_ text: String, language: CodeLanguage.Language) -> Node? {
         guard let g = grammars[language] else { return nil }
         let parser = Parser()
         try? parser.setLanguage(g.language)
-        guard let tree = parser.parse(text), let root = tree.rootNode else { return nil }
-        let ns = text as NSString
+        return parser.parse(text)?.rootNode
+    }
+
+    /// The smallest syntax node covering `selection` in an already-parsed tree.
+    /// Internal so ``HighlightSession`` reuses it with its cached tree.
+    static func nodeSpanning(_ selection: NSRange, ns: NSString, root: Node) -> Node? {
         guard NSMaxRange(selection) <= ns.length else { return nil }
         // SwiftTreeSitter parses strings as UTF-16LE, so a tree-sitter byte offset
         // equals the UTF-16 (NSRange) index × 2 — NOT the UTF-8 byte count.
@@ -168,7 +185,19 @@ public final class TreeSitterHighlighter: CodeHighlighter {
     /// All definition symbols (functions, classes, …) in `text`, ordered by
     /// position. Empty when the language has no symbol query or the grammar
     /// isn't loaded. Thread-safe (the project index calls this off the main queue).
+    /// - Important: performs a fresh full parse of `text`; on big open documents
+    ///   prefer ``HighlightSession/symbols(text:)``, which queries the cached tree.
     public static func symbols(in text: String, language: CodeLanguage.Language) -> [Symbol] {
+        guard let g = grammars[language], SymbolQueries.sources[language] != nil else { return [] }
+        let parser = Parser()
+        try? parser.setLanguage(g.language)
+        guard let tree = parser.parse(text) else { return [] }
+        return symbols(tree: tree, ns: text as NSString, language: language)
+    }
+
+    /// Query half of ``symbols(in:language:)``, against an already-parsed tree.
+    /// Internal so ``HighlightSession`` reuses it with its cached tree.
+    static func symbols(tree: MutableTree, ns: NSString, language: CodeLanguage.Language) -> [Symbol] {
         guard let g = grammars[language], let src = SymbolQueries.sources[language] else { return [] }
         symbolCacheLock.lock()
         var query = symbolQueryCache[language]
@@ -179,10 +208,6 @@ public final class TreeSitterHighlighter: CodeHighlighter {
             query = q
         }
         guard let query else { return [] }
-        let parser = Parser()
-        try? parser.setLanguage(g.language)
-        guard let tree = parser.parse(text) else { return [] }
-        let ns = text as NSString
         var out: [Symbol] = []
         let cursor = query.execute(in: tree)
         while let match = cursor.next() {
@@ -230,12 +255,31 @@ public final class TreeSitterHighlighter: CodeHighlighter {
 
     /// Enclosing definition names at `offset` (outermost → innermost) for breadcrumbs,
     /// e.g. ["UserRepository", "findById"].
+    /// - Important: performs a fresh full parse of `text` (~620 ms on a 2.8 MB
+    ///   Swift file); on open documents prefer ``HighlightSession/breadcrumbs(at:text:)``,
+    ///   which walks the session's cached tree in microseconds.
     public static func breadcrumbs(at offset: Int, text: String, language: CodeLanguage.Language) -> [String] {
-        guard let g = grammars[language] else { return [] }
-        let parser = Parser()
-        try? parser.setLanguage(g.language)
-        guard let tree = parser.parse(text), let root = tree.rootNode else { return [] }
+        guard let root = freshParseRoot(text, language: language) else { return [] }
+        return breadcrumbs(at: offset, ns: text as NSString, root: root)
+    }
+
+    /// A reusable breadcrumb resolver over **one** parse of `text`: parses once,
+    /// then each call to the returned closure is a cached-tree walk (microseconds).
+    /// Use when resolving many offsets in the same text — e.g. Blast Radius maps
+    /// every changed line to its enclosing symbol, and the per-call static
+    /// ``breadcrumbs(at:text:language:)`` re-parses the whole file *per line*
+    /// (~620 ms each on a 2.8 MB Swift file). Nil when no grammar is loaded.
+    /// The closure retains the parsed tree (a root `Node` keeps its `Tree` alive)
+    /// and is safe on any single thread — confine it to the thread that made it.
+    public static func breadcrumbResolver(text: String, language: CodeLanguage.Language) -> ((Int) -> [String])? {
+        guard let root = freshParseRoot(text, language: language) else { return nil }
         let ns = text as NSString
+        return { offset in breadcrumbs(at: offset, ns: ns, root: root) }
+    }
+
+    /// Tree-walk half of ``breadcrumbs(at:text:language:)``, against an
+    /// already-parsed `root`. Internal so ``HighlightSession`` reuses it.
+    static func breadcrumbs(at offset: Int, ns: NSString, root: Node) -> [String] {
         guard offset <= ns.length else { return [] }
         let byteOffset = offset * 2   // UTF-16 index → tree-sitter byte offset
         guard let node = root.descendant(in: UInt32(byteOffset)..<UInt32(byteOffset)) else { return [] }
@@ -367,11 +411,26 @@ public final class TreeSitterHighlighter: CodeHighlighter {
     /// Runs a highlights query over `tree` (parsed from `source`), resolving
     /// predicates and applying colors offset into `storage` by `offset`, clipped
     /// to `clip`. Later query patterns win over generic catch-alls.
+    ///
+    /// The query cursor is **bounded to the clip** (translated into source
+    /// coordinates; bytes = UTF-16 index × 2 — the load-bearing SwiftTreeSitter
+    /// rule), so match iteration is O(viewport), not O(document). Unbounded, a
+    /// per-viewport pass on a multi-megabyte file iterated every match in the
+    /// file (~2.4 s on a 2.8 MB Swift file) only to clip them at paint time.
+    /// `ts_query_cursor_set_byte_range` keeps every match that *intersects* the
+    /// range, so edge-straddling tokens still arrive and the paint-time clipping
+    /// in `apply(hits:clip:into:)` trims them exactly as before.
     /// Internal (not private) so tests can drive it with a hand-built query.
     @MainActor
     static func applyQuery(_ query: Query, tree: MutableTree, source ns: NSString,
                            offset: Int, clip: NSRange, into storage: NSTextStorage) {
+        guard clip.length > 0 else { return }   // nothing can paint inside an empty clip
         let cursor = query.execute(in: tree)
+        // Clip in source (query) coordinates, clamped to the source bounds.
+        let lower = min(max(0, clip.location - offset), ns.length)
+        let upper = min(max(lower, NSMaxRange(clip) - offset), ns.length)
+        guard upper > lower else { return }     // the clip lies wholly outside this source
+        cursor.setRange(NSRange(location: lower, length: upper - lower))
         let resolving = ResolvingQueryCursor(cursor: cursor)
         resolving.prepare(with: { r, _ in NSMaxRange(r) <= ns.length ? ns.substring(with: r) : nil })
         var hits: [(range: NSRange, pattern: Int, color: NSColor)] = []
@@ -404,10 +463,24 @@ public final class TreeSitterHighlighter: CodeHighlighter {
     /// language parse as ONE document via `Parser.includedRanges`, so constructs
     /// split across chunks (e.g. `<section>`…`</section>` around a PHP block, whose
     /// HTML arrives as separate `text` nodes) still pair instead of parsing as errors.
-    private static func injectionSites(_ injQuery: Query, tree: MutableTree, ns: NSString) -> [(name: String, ranges: [NSRange])] {
+    ///
+    /// When `clip` is non-nil the cursor is bounded to it (source coordinates),
+    /// making per-viewport passes O(viewport): sites *intersecting* the clip are
+    /// still collected whole, but sibling chunks entirely outside it no longer
+    /// join the combined parse — for viewport-tier files (> ~100k chars) a
+    /// construct split across an off-screen chunk may highlight slightly
+    /// differently at the clip edge, an accepted trade (small files always pass
+    /// whole-document clips). Whole-document callers (`dumpCaptures`) pass nil.
+    private static func injectionSites(_ injQuery: Query, tree: MutableTree, ns: NSString,
+                                       clip: NSRange? = nil) -> [(name: String, ranges: [NSRange])] {
         var grouped: [String: [NSRange]] = [:]
         var order: [String] = []
         let cursor = injQuery.execute(in: tree)
+        if let clip {
+            let lower = min(max(0, clip.location), ns.length)
+            let upper = min(max(lower, NSMaxRange(clip)), ns.length)
+            if upper > lower { cursor.setRange(NSRange(location: lower, length: upper - lower)) }
+        }
         while let match = cursor.next() {
             guard let named = match.injection(with: { r, _ in NSMaxRange(r) <= ns.length ? ns.substring(with: r) : nil }),
                   let content = match.captures(named: "injection.content").first else { continue }
@@ -463,7 +536,8 @@ public final class TreeSitterHighlighter: CodeHighlighter {
     static func applyInjections(_ g: Grammar, tree: MutableTree, source ns: NSString,
                                 offset: Int, clip: NSRange, into storage: NSTextStorage, depth: Int) {
         guard depth < 3, let injQuery = g.injections else { return }
-        for site in injectionSites(injQuery, tree: tree, ns: ns) {
+        let sourceClip = NSRange(location: max(0, clip.location - offset), length: clip.length)
+        for site in injectionSites(injQuery, tree: tree, ns: ns, clip: sourceClip) {
             guard let sub = grammarForInjection(site.name) else { continue }
             guard site.ranges.contains(where: {
                 NSIntersectionRange(NSRange(location: offset + $0.location, length: $0.length), clip).length > 0

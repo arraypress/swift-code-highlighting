@@ -159,6 +159,25 @@ final class TreeSitterHighlighterTests: XCTestCase {
         XCTAssertEqual(TreeSitterHighlighter.breadcrumbs(at: len + 3, text: text, language: .python), [])
     }
 
+    /// The parse-once resolver (Blast Radius maps every changed line through it)
+    /// must answer repeated offsets identically to the per-call static path —
+    /// including out-of-bounds offsets — from its single cached tree.
+    func testBreadcrumbResolverMatchesStaticAcrossOffsets() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.python), "Python grammar failed to load")
+        let text = "class Greeter:\n    def hello(self):\n        pass\n\ndef solo():\n    pass\n"
+        let ns = text as NSString
+        let resolver = try XCTUnwrap(TreeSitterHighlighter.breadcrumbResolver(text: text, language: .python))
+        for offset in [ns.range(of: "pass").location,      // inside Greeter.hello
+                       ns.range(of: "solo").location,      // inside the top-level def
+                       0,                                  // before any definition
+                       ns.length + 7] {                    // out of bounds → []
+            XCTAssertEqual(resolver(offset),
+                           TreeSitterHighlighter.breadcrumbs(at: offset, text: text, language: .python),
+                           "resolver diverged from the static path at offset \(offset)")
+        }
+        XCTAssertEqual(resolver(ns.range(of: "pass").location), ["Greeter", "hello"])
+    }
+
     // MARK: - 2. Capture precedence: later patternIndex wins
 
     /// Compiles `queryText` against a bundled grammar, parses `text`, and runs
