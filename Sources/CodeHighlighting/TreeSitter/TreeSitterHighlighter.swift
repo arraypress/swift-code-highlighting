@@ -68,7 +68,12 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         var m: [CodeLanguage.Language: Grammar] = [:]
         m[.json]       = g(tree_sitter_json(),       "TreeSitterJSON",
                            extra: "(pair key: (string) @property)\n((number) @number)\n[(true) (false)] @boolean\n(null) @constant.builtin")
-        m[.css]        = g(tree_sitter_css(),        "TreeSitterCSS")
+        // CSS custom properties (`--brand-primary`) are captured `@variable` upstream
+        // with a `^--` guard; the bare-variable role is nil now (see `role(for:)`),
+        // so re-capture them as `@property` — sigiled, self-distinguishing tokens
+        // that VS Code keeps colored (same hue family as bash's `$VAR` @property).
+        m[.css]        = g(tree_sitter_css(),        "TreeSitterCSS",
+                           extra: "((property_name) @property (#match? @property \"^--\"))\n((plain_value) @property (#match? @property \"^--\"))")
         m[.javascript] = g(tree_sitter_javascript(), "TreeSitterJavaScript")
         m[.python]     = g(tree_sitter_python(),     "TreeSitterPython")
         m[.rust]       = g(tree_sitter_rust(),       "TreeSitterRust")
@@ -81,7 +86,12 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         m[.typescript] = g(tree_sitter_typescript(), "TreeSitterTypeScript", inherits: ["TreeSitterJavaScript"])
         m[.cpp]        = g(tree_sitter_cpp(),        "TreeSitterCPP", inherits: ["TreeSitterC"])
         m[.csharp]     = g(tree_sitter_c_sharp(),    "TreeSitterCSharp")
-        m[.php]        = g(tree_sitter_php(),         "TreeSitterPHP", injectHTMLText: true)
+        // PHP `$vars` are captured `(variable_name) @variable` upstream — nil'd by the
+        // bare-variable role now. Like bash's `$VAR`, they're sigiled tokens VS Code
+        // keeps colored, so re-capture as `@property` — except `$this`, whose inner
+        // `(name)` keeps the `@variable.builtin` color (this extra would outrank it).
+        m[.php]        = g(tree_sitter_php(),         "TreeSitterPHP", injectHTMLText: true,
+                           extra: "((variable_name) @property (#not-eq? @property \"$this\"))")
         m[.yaml]       = g(tree_sitter_yaml(),       "TreeSitterYAML")
         m[.toml]       = g(tree_sitter_toml(),       "TreeSitterTOML")
         m[.lua]        = g(tree_sitter_lua(),        "TreeSitterLua")
@@ -492,10 +502,15 @@ public final class TreeSitterHighlighter: CodeHighlighter {
     /// TextKit 2 invalidates nothing, and no fragment re-layout follows. That
     /// reconcile was the single largest cost of every scroll re-highlight
     /// (~19–41 ms per pass measured on a 2.8 MB file, scaling with hit density).
+    ///
+    /// Returns the number of attribute writes performed — 0 means the pass was
+    /// a no-op for TextKit (nothing invalidated), which hosts use to skip their
+    /// post-pass layout settle entirely.
+    @discardableResult
     static func applyResolved(hits: [Hit], clip: NSRange, defaultColor: NSColor,
-                              into storage: NSTextStorage) {
+                              into storage: NSTextStorage) -> Int {
         let clipped = NSIntersectionRange(clip, NSRange(location: 0, length: storage.length))
-        guard clipped.length > 0 else { return }
+        guard clipped.length > 0 else { return 0 }
 
         // Desired color per position, painted in ascending precedence so later
         // patterns overwrite earlier ones — same math as sequential application.
@@ -529,8 +544,18 @@ public final class TreeSitterHighlighter: CodeHighlighter {
                 i = j
             }
         }
-        for w in writes { storage.addAttribute(.foregroundColor, value: w.color, range: w.range) }
+        for w in writes {
+            storage.addAttribute(.foregroundColor, value: w.color, range: w.range)
+            writeObserver?(w.range)
+        }
+        return writes.count
     }
+
+    /// Diagnostic seam: invoked once per ACTUAL attribute write (the minimal
+    /// diff-aware ranges), so hosts/probes can verify the zero-write contract
+    /// over settled text. Nil (and free) in production. Main-thread only,
+    /// like `highlight` itself.
+    public static var writeObserver: ((NSRange) -> Void)?
 
     /// Applies collected capture hits: later `patternIndex` wins (hits are applied
     /// in ascending pattern order so later patterns overwrite earlier ones), and
@@ -558,6 +583,17 @@ public final class TreeSitterHighlighter: CodeHighlighter {
     /// construct split across an off-screen chunk may highlight slightly
     /// differently at the clip edge, an accepted trade (small files always pass
     /// whole-document clips). Whole-document callers (`dumpCaptures`) pass nil.
+    ///
+    /// Matches go through a `ResolvingQueryCursor` so injection PREDICATES are
+    /// honored — a plain cursor ignores them, which turned e.g. lua's
+    /// `((function_call …) (#eq? @_cdef_identifier "cdef"))` ffi.cdef rule into
+    /// "inject C into EVERY single-string function call": whole Lua files had
+    /// their ordinary string arguments parsed as C (garbage tokens), and the
+    /// clip-dependent combined parse repainted those strings differently on
+    /// every viewport pass — measured 18k chars of redundant attribute rewrites
+    /// per scroll on a 100 KB Lua file, each one invalidating TK2 fragment
+    /// layout mid-scroll.
+    @MainActor
     private static func injectionSites(_ injQuery: Query, tree: MutableTree, ns: NSString,
                                        clip: NSRange? = nil) -> [(name: String, ranges: [NSRange])] {
         var grouped: [String: [NSRange]] = [:]
@@ -568,7 +604,9 @@ public final class TreeSitterHighlighter: CodeHighlighter {
             let upper = min(max(lower, NSMaxRange(clip)), ns.length)
             if upper > lower { cursor.setRange(NSRange(location: lower, length: upper - lower)) }
         }
-        while let match = cursor.next() {
+        let resolving = ResolvingQueryCursor(cursor: cursor)
+        resolving.prepare(with: { r, _ in NSMaxRange(r) <= ns.length ? ns.substring(with: r) : nil })
+        while let match = resolving.next() {
             guard let named = match.injection(with: { r, _ in NSMaxRange(r) <= ns.length ? ns.substring(with: r) : nil }),
                   let content = match.captures(named: "injection.content").first else { continue }
             let r = content.range
@@ -758,7 +796,20 @@ public final class TreeSitterHighlighter: CodeHighlighter {
 
     /// The semantic role for a tree-sitter capture (first dotted component), e.g.
     /// "function.method" → "function", "variable.parameter" → "variable".
+    ///
+    /// The BARE `variable`/`identifier` captures map to nil (default text) on
+    /// purpose: most vendored queries carry an nvim-convention catch-all like
+    /// `(identifier) @variable` that captures *every* plain identifier, which
+    /// painted whole files in the variable color (~39% of all tokens in a real
+    /// Lua file — an "error wash", not highlighting). VS Code leaves plain
+    /// identifier references at the default foreground; so do we. Qualified
+    /// variable captures stay colored: `@variable.builtin` (self/this),
+    /// `@variable.parameter` / `@parameter`, `@variable.member`. Sigiled
+    /// variables that read as tokens in their own right ($VAR in bash, $var in
+    /// PHP, --custom-props in CSS) are kept colored via `@property` captures in
+    /// the vendored/`extra` queries instead.
     public static func role(for capture: String) -> String? {
+        if capture == "variable" || capture == "identifier" { return nil }   // bare catch-alls
         switch capture.split(separator: ".").first.map(String.init) ?? capture {
         case "keyword", "conditional", "repeat", "include", "exception",
              "storageclass", "label", "tag":            return "keyword"
@@ -768,7 +819,7 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         case "boolean", "constant":                     return "constant"
         case "type", "constructor", "namespace", "module", "class": return "type"
         case "function", "method":                      return "function"
-        case "variable", "parameter", "identifier":     return "variable"
+        case "variable", "parameter":                   return "variable"
         case "property", "field", "member", "attribute", "annotation", "decorator":
             return "property"
         default:                                        return nil

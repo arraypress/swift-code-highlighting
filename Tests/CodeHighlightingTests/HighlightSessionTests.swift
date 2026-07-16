@@ -84,7 +84,7 @@ final class HighlightSessionTests: XCTestCase {
 
     func testSessionParsesOnceAcrossRepeatedHighlights() throws {
         try XCTSkipUnless(TreeSitterHighlighter.supports(.python), "Python grammar failed to load")
-        let session = try makeSession("((identifier) @variable)")
+        let session = try makeSession("((identifier) @variable.builtin)")
         let text = "alpha = 1\nbeta = 2\ngamma = 3\n"
         let ns = text as NSString
 
@@ -108,7 +108,7 @@ final class HighlightSessionTests: XCTestCase {
 
     func testNoteEditBeforeFirstHighlightIsNoOp() throws {
         try XCTSkipUnless(TreeSitterHighlighter.supports(.python), "Python grammar failed to load")
-        let session = try makeSession("((identifier) @variable)")
+        let session = try makeSession("((identifier) @variable.builtin)")
         // No tree yet: nothing to edit, nothing to parse.
         session.noteEdit(range: NSRange(location: 0, length: 0), replacementLength: 4, newText: "x = 1\n")
         XCTAssertEqual(session.fullParseCount, 0)
@@ -123,7 +123,7 @@ final class HighlightSessionTests: XCTestCase {
 
     func testNoteEditInsertionBeforeTokensShiftsHighlightRanges() throws {
         try XCTSkipUnless(TreeSitterHighlighter.supports(.python), "Python grammar failed to load")
-        let session = try makeSession("((identifier) @variable)")
+        let session = try makeSession("((identifier) @variable.builtin)")
         let old = "alpha = 1\nbeta = 2\n"
         _ = paint(session, old)
         XCTAssertEqual(session.fullParseCount, 1)
@@ -153,7 +153,7 @@ final class HighlightSessionTests: XCTestCase {
 
     func testNoteEditWithCJKAndEmojiKeepsByteMathExact() throws {
         try XCTSkipUnless(TreeSitterHighlighter.supports(.python), "Python grammar failed to load")
-        let session = try makeSession("((identifier) @variable)")
+        let session = try makeSession("((identifier) @variable.builtin)")
         let old = "a = \"日本語\"\nbeta = 2\ngamma = 3\n"
         _ = paint(session, old)
 
@@ -193,7 +193,7 @@ final class HighlightSessionTests: XCTestCase {
 
     func testInvalidateRecoversFromDesyncedTree() throws {
         try XCTSkipUnless(TreeSitterHighlighter.supports(.python), "Python grammar failed to load")
-        let session = try makeSession("((identifier) @variable)")
+        let session = try makeSession("((identifier) @variable.builtin)")
         let textA = "alpha = 1\n"
         _ = paint(session, textA)
 
@@ -219,7 +219,7 @@ final class HighlightSessionTests: XCTestCase {
 
     func testInconsistentNoteEditDropsTreeAndNextHighlightReparses() throws {
         try XCTSkipUnless(TreeSitterHighlighter.supports(.python), "Python grammar failed to load")
-        let session = try makeSession("((identifier) @variable)")
+        let session = try makeSession("((identifier) @variable.builtin)")
         let text = "alpha = 1\n"
         _ = paint(session, text)
         XCTAssertEqual(session.fullParseCount, 1)
@@ -248,7 +248,7 @@ final class HighlightSessionTests: XCTestCase {
 
     func testHighlightEmptyStorageAndOutOfBoundsClipAreSafe() throws {
         try XCTSkipUnless(TreeSitterHighlighter.supports(.python), "Python grammar failed to load")
-        let session = try makeSession("((identifier) @variable)")
+        let session = try makeSession("((identifier) @variable.builtin)")
         // Empty document: nothing to paint, must not crash.
         _ = paint(session, "")
         // The empty doc's tree is now cached; drop it before switching texts

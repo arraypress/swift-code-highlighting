@@ -7,6 +7,7 @@ Syntax highlighting for macOS `NSTextStorage`, with two backends behind one `Cod
 - 🌳 **Tree-sitter highlighting** — `TreeSitterHighlighter` parses the whole buffer and applies each grammar's `highlights.scm` (later-pattern-wins precedence, `#eq?`/`#match?` predicates resolved), with recursive injection highlighting for embedded languages (CSS/JS in HTML, HTML in PHP, …)
 - ⚡ **Incremental sessions** — `HighlightSession` keeps the parsed tree alive between highlight passes: the document parses **once**, viewport re-highlights while scrolling run the query against the cached tree (no re-parse), and `noteEdit(range:replacementLength:newText:)` re-parses **incrementally** via tree-sitter's `tree.edit`; `invalidate()` forces one fresh parse after a reload (injected sub-languages still re-parse per pass)
 - 🎨 **Regex fallback** — `SyntaxHighlighter` colors an `NSTextStorage` in place with per-language rule tables plus family-level rules (c-like, ruby-like, lisp-like, ml-like, shell, markup, config, sql, tex, data) for everything else; strings and comments are resolved in one left-to-right scan so neither can repaint the other
+- 📄 **Custom languages** — `CustomLanguageDefinition` decodes a hand-written JSON file describing a niche language (comment markers, string delimiters, keyword lists, raw-regex patterns) and `SyntaxHighlighter(custom:colors:)` compiles it into the same rule tables the built-in languages use — see [Custom languages](#custom-languages)
 - 🔎 **Symbol extraction** — `TreeSitterHighlighter.symbols(in:language:)` returns every definition (`Symbol`: name, `SymbolKind`, range, line) via the hand-written `SymbolQueries`, for outlines and Go-to-Symbol
 - 🗂️ **Project-wide index** — `ProjectSymbolIndex` builds a name → `DefLocation` map over a whole tree on a background queue (skips `.git`/`node_modules`/…, 500 KB and 5000-file caps), with incremental `updateFile(_:)` and superseding rebuilds, for cross-file Go-to-Definition
 - 💬 **Hover docs + breadcrumbs** — `hoverInfo(for:in:language:)` returns a highlighted signature plus the doc comment above it (markers derived from the language's own comment tokens); `breadcrumbs(at:text:language:)` returns the enclosing definition path
@@ -123,6 +124,70 @@ let bigger = TreeSitterHighlighter.enclosingNodeRange(selection: sel, text: text
 // Jump to the next named sibling.
 let next = TreeSitterHighlighter.siblingRange(of: sel, text: text, language: .rust, forward: true)
 ```
+
+## Custom languages
+
+For languages neither backend knows (in-house DSLs, niche formats), users can supply a JSON definition and get regex highlighting through the exact same engine — `SyntaxHighlighter(custom:colors:)` compiles it into the same rule tables the built-in languages use, including the string/comment precedence merge. File discovery (where the JSON lives, matching it to files by `extensions`/`filenames`) is the host app's job; the package provides the model and the highlighter.
+
+```swift
+let data = try Data(contentsOf: definitionURL)
+switch CustomLanguageDefinition.decode(from: data) {   // errors are written for the JSON's author
+case .success(let definition):
+    let highlighter = SyntaxHighlighter(custom: definition, colors: MyColors())
+    highlighter.highlight(storage, in: fullRange)
+case .failure(let error):
+    print(error.localizedDescription)   // e.g. `patterns[3] has unknown kind "keyowrd". Valid kinds: …`
+}
+```
+
+### The JSON format
+
+Only `name` and `extensions` are required. Everything else is optional; `numbers` and `functionCalls` default to `true`. A complete reference definition — JSFX, REAPER's EEL2 effect DSL:
+
+```json
+{
+  "name": "JSFX",
+  "extensions": ["jsfx"],
+  "lineComment": "//",
+  "blockCommentStart": "/*",
+  "blockCommentEnd": "*/",
+  "stringDelimiters": ["\""],
+  "caseInsensitive": true,
+  "keywords": ["function", "local", "instance", "static", "global", "globals", "loop", "while"],
+  "constants": ["srate", "samplesblock", "num_ch", "tempo", "play_state", "play_position", "beat_position", "ts_num", "ts_denom", "trigger", "pdc_delay", "pdc_bot_ch", "pdc_top_ch", "ext_noinit", "ext_nodenorm", "ext_tail_size", "gfx_w", "gfx_h", "mouse_x", "mouse_y"],
+  "numbers": true,
+  "functionCalls": true,
+  "patterns": [
+    { "pattern": "\\bspl(?:[0-9]|[1-5][0-9]|6[0-3])\\b", "kind": "variable" },
+    { "pattern": "\\bslider\\d+\\b", "kind": "variable" },
+    { "pattern": "^(?:desc|in_pin|out_pin|filename|import|options|tags|slider\\d+):", "kind": "keyword" },
+    { "pattern": "^@(?:init|slider|block|sample|serialize|gfx)\\b", "kind": "attribute" },
+    { "pattern": "\\$x[0-9a-fA-F]+", "kind": "number" },
+    { "pattern": "\\$'(?:\\\\.|[^'])'", "kind": "number" },
+    { "pattern": "\\$(?:pi|e|phi)\\b", "kind": "number" }
+  ]
+}
+```
+
+Field reference:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `name` | string, **required** | Display name of the language. |
+| `extensions` | [string], **required** | File extensions, without dots. |
+| `filenames` | [string] | Exact filenames to claim (for extension-less files). |
+| `lineComment` | string | Line-comment marker (literal text, not a regex). |
+| `blockCommentStart` / `blockCommentEnd` | string | Block-comment delimiters (both must be set). |
+| `stringDelimiters` | [string] | Each delimiter builds the standard escaped-string regex (`\"` and `\\` are skipped inside the literal). |
+| `keywords` / `types` / `constants` | [string] | Word lists, joined into `\b`-anchored alternations; each word is regex-escaped. Constants paint with the number-literal color. |
+| `numbers` | bool, default `true` | Standard number regex (decimal + `0x…` hex). |
+| `functionCalls` | bool, default `true` | Identifier directly before a `(` → function. |
+| `patterns` | [{`pattern`, `kind`}] | Raw ICU regexes for anything the fields above can't express. `kind` ∈ `comment`, `string`, `keyword`, `type`, `number`, `function`, `attribute`, `property`, `variable`, `constant`. |
+| `caseInsensitive` | bool, default `false` | All built regexes match case-insensitively. |
+
+Rule precedence mirrors the built-in tables: `patterns` apply first (later array entries repaint earlier ones where they overlap), then `keywords`/`types`/`constants`, then numbers and function calls. Comments and strings — from the structured fields *or* from `comment`/`string`-kind patterns — always win over code rules and are resolved together left-to-right, so a `//` inside a string literal can't repaint the line and vice versa.
+
+Two failure modes, by design: a pattern whose **regex** doesn't compile is *skipped* (one bad rule can't take down the definition), while an unknown **kind** string *fails the decode* with a message naming the pattern index and listing the valid kinds — the JSON is hand-authored, so typos fail loudly.
 
 ## License
 

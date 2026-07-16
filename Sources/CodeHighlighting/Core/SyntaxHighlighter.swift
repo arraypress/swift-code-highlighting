@@ -35,13 +35,21 @@ public final class SyntaxHighlighter: CodeHighlighter {
     /// Builds the rule tables for `language`, painting with `colors`.
     /// Never fails: an unknown language falls back to its family's rules
     /// (worst case, plain text gets no rules and stays uncolored).
-    public init(language: Language, colors: TokenColorProviding) {
+    public convenience init(language: Language, colors: TokenColorProviding) {
+        self.init(defs: Self.buildDefs(for: language), regexOptions: .anchorsMatchLines, colors: colors)
+    }
+
+    /// Shared designated initializer: compiles a `(pattern, kind)` table into
+    /// the three rule groups. Backs both the built-in-language init above and
+    /// `init(custom:colors:)` (custom language definitions). A pattern that
+    /// fails to compile is skipped — never fatal.
+    init(defs: [(String, TokenKind)], regexOptions: NSRegularExpression.Options, colors: TokenColorProviding) {
         self.colors = colors
         var code: [Rule] = []
         var strings: [Rule] = []
         var comments: [Rule] = []
-        for (pattern, kind) in Self.buildDefs(for: language) {
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: .anchorsMatchLines) else { continue }
+        for (pattern, kind) in defs {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: regexOptions) else { continue }
             switch kind {
             case .comment: comments.append((regex, kind))
             case .string:  strings.append((regex, kind))

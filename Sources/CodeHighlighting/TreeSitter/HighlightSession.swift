@@ -282,7 +282,12 @@ public final class HighlightSession {
     ///     via ``noteEdit(range:replacementLength:newText:)``).
     ///   - clip: the range to (re)color; clamped to the storage bounds.
     /// - Note: Must be called on the main thread.
-    public func highlight(in storage: NSTextStorage, text: String, clip: NSRange) {
+    /// - Returns: whether the pass performed any attribute writes. `false` means
+    ///   the clip was already correctly colored — TextKit saw no edit, nothing
+    ///   was invalidated, and the host can (must, for scroll smoothness) skip
+    ///   its post-pass layout settle.
+    @discardableResult
+    public func highlight(in storage: NSTextStorage, text: String, clip: NSRange) -> Bool {
         stateLock.lock()
         if tree == nil {
             tree = parser.parse(text)
@@ -291,22 +296,22 @@ public final class HighlightSession {
         }
         let tree = self.tree
         stateLock.unlock()
-        guard let tree else { return }
+        guard let tree else { return false }
         let ns = text as NSString
         let clipped = NSIntersectionRange(clip, NSRange(location: 0, length: storage.length))
-        guard clipped.length > 0 else { return }
+        guard clipped.length > 0 else { return false }
 
         // ResolvingQueryCursor is main-actor-isolated; highlight only runs on main.
-        MainActor.assumeIsolated {
+        return MainActor.assumeIsolated {
             var base = 0
             var hits = TreeSitterHighlighter.collectHits(grammar.highlights, tree: tree, source: ns,
                                                          offset: 0, clip: clipped, nextBase: &base)
             hits += TreeSitterHighlighter.collectInjectionHits(grammar, tree: tree, source: ns,
                                                                offset: 0, clip: clipped, depth: 0,
                                                                nextBase: &base)
-            TreeSitterHighlighter.applyResolved(hits: hits, clip: clipped,
-                                                defaultColor: HighlightTheme.colors.foreground,
-                                                into: storage)
+            return TreeSitterHighlighter.applyResolved(hits: hits, clip: clipped,
+                                                       defaultColor: HighlightTheme.colors.foreground,
+                                                       into: storage) > 0
         }
     }
 

@@ -204,9 +204,9 @@ final class TreeSitterHighlighterTests: XCTestCase {
         try XCTSkipUnless(TreeSitterHighlighter.supports(.python), "Python grammar failed to load")
         let text = "print(value)"
         let ns = text as NSString
-        // Pattern 0 captures every identifier as @variable; pattern 1 recaptures
+        // Pattern 0 captures every identifier as @variable.builtin; pattern 1 recaptures
         // them as @function. Later patternIndex must win everywhere.
-        let s = try runQuery("((identifier) @variable)\n((identifier) @function)", on: text)
+        let s = try runQuery("((identifier) @variable.builtin)\n((identifier) @function)", on: text)
         XCTAssertEqual(colorAt(s, 0), .brown, "`print`: the later @function pattern wins")
         XCTAssertEqual(colorAt(s, ns.range(of: "value").location), .brown, "`value`: later pattern wins too")
     }
@@ -214,8 +214,8 @@ final class TreeSitterHighlighterTests: XCTestCase {
     func testEarlierPatternLosesRegardlessOfCaptureName() throws {
         try XCTSkipUnless(TreeSitterHighlighter.supports(.python), "Python grammar failed to load")
         let text = "print(value)"
-        // Same query with the pattern order swapped: now @variable is later.
-        let s = try runQuery("((identifier) @function)\n((identifier) @variable)", on: text)
+        // Same query with the pattern order swapped: now @variable.builtin is later.
+        let s = try runQuery("((identifier) @function)\n((identifier) @variable.builtin)", on: text)
         XCTAssertEqual(colorAt(s, 0), .cyan, "swapping pattern order flips the winner — order, not name, decides")
     }
 
@@ -226,7 +226,7 @@ final class TreeSitterHighlighterTests: XCTestCase {
         // Later pattern is #eq?-restricted to "print": it must beat the
         // catch-all on `print` but leave `value` to the earlier pattern.
         let s = try runQuery("""
-            ((identifier) @variable)
+            ((identifier) @variable.builtin)
             ((identifier) @function (#eq? @function "print"))
             """, on: text)
         XCTAssertEqual(colorAt(s, 0), .brown, "`print` matches the later #eq? pattern")
@@ -256,7 +256,7 @@ final class TreeSitterHighlighterTests: XCTestCase {
         let sub = "x = 1"
         let host = "#héllo 🙂 " + sub   // preamble is 10 UTF-16 units
         let preamble = (host as NSString).length - (sub as NSString).length
-        let s = try runQuery("((identifier) @variable)", on: sub,
+        let s = try runQuery("((identifier) @variable.builtin)", on: sub,
                              offset: preamble,
                              clip: NSRange(location: 0, length: (host as NSString).length),
                              storageText: host)
@@ -333,7 +333,7 @@ final class TreeSitterHighlighterTests: XCTestCase {
         // exact UTF-16 NSRanges (SwiftTreeSitter byte→UTF-16 must divide by 2).
         let text = Self.unicodePrefix + "result = compute(data)\n"
         let ns = text as NSString
-        let s = try runQuery("((identifier) @variable)", on: text)
+        let s = try runQuery("((identifier) @variable.builtin)", on: text)
         for word in ["note", "result", "compute", "data"] {
             let r = ns.range(of: word)
             XCTAssertEqual(colorAt(s, r.location), .cyan, "`\(word)` starts colored")
@@ -352,13 +352,16 @@ extension TreeSitterHighlighterTests {
         let src = """
         ["(" ")"] @punctuation.bracket
         (identifier) @variable
+        (identifier) @variable.builtin
         ["+" "-"] @operator
         "return" @keyword
         """
         let pruned = TreeSitterHighlighter.prunedQuerySource(src)
         XCTAssertFalse(pruned.contains("@punctuation.bracket"), "punctuation can never paint — dropped")
         XCTAssertFalse(pruned.contains("@operator"), "operators can never paint — dropped")
-        XCTAssertTrue(pruned.contains("(identifier) @variable"))
+        XCTAssertFalse(pruned.contains("@variable\n"),
+                       "the bare identifier catch-all maps to no color (default text) — dropped")
+        XCTAssertTrue(pruned.contains("(identifier) @variable.builtin"))
         XCTAssertTrue(pruned.contains("\"return\" @keyword"))
     }
 
@@ -387,7 +390,7 @@ extension TreeSitterHighlighterTests {
         // pattern 1 (punctuation) sits between two colored identifier patterns;
         // pruning it must not flip the relative precedence of patterns 0 and 2.
         let pruned = TreeSitterHighlighter.prunedQuerySource("""
-            ((identifier) @variable)
+            ((identifier) @variable.builtin)
             ["(" ")"] @punctuation.bracket
             ((identifier) @function)
             """)
@@ -398,7 +401,7 @@ extension TreeSitterHighlighterTests {
     func testPrunedRealQueryPaintsIdenticallyToUnpruned() throws {
         try XCTSkipUnless(TreeSitterHighlighter.supports(.python), "Python grammar failed to load")
         let query = """
-            ((identifier) @variable)
+            ((identifier) @variable.builtin)
             ["(" ")"] @punctuation.bracket
             ((identifier) @function (#eq? @function "print"))
             (string) @string

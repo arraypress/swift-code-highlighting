@@ -75,7 +75,12 @@ let package = Package(
                 // the tree-sitter path without the app's resource bundles.
                 .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
             ],
-            path: "Tests"
+            path: "Tests",
+            resources: [
+                // Reference custom-language definition (JSFX) used by the
+                // CustomLanguageDefinition decode/highlight tests.
+                .copy("CodeHighlightingTests/Resources/jsfx.json"),
+            ]
         ),
     ]
 )

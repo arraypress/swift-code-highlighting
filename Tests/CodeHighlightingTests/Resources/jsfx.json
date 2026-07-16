@@ -1,0 +1,22 @@
+{
+  "name": "JSFX",
+  "extensions": ["jsfx"],
+  "lineComment": "//",
+  "blockCommentStart": "/*",
+  "blockCommentEnd": "*/",
+  "stringDelimiters": ["\""],
+  "caseInsensitive": true,
+  "keywords": ["function", "local", "instance", "static", "global", "globals", "loop", "while"],
+  "constants": ["srate", "samplesblock", "num_ch", "tempo", "play_state", "play_position", "beat_position", "ts_num", "ts_denom", "trigger", "pdc_delay", "pdc_bot_ch", "pdc_top_ch", "ext_noinit", "ext_nodenorm", "ext_tail_size", "gfx_w", "gfx_h", "mouse_x", "mouse_y"],
+  "numbers": true,
+  "functionCalls": true,
+  "patterns": [
+    { "pattern": "\\bspl(?:[0-9]|[1-5][0-9]|6[0-3])\\b", "kind": "variable" },
+    { "pattern": "\\bslider\\d+\\b", "kind": "variable" },
+    { "pattern": "^(?:desc|in_pin|out_pin|filename|import|options|tags|slider\\d+):", "kind": "keyword" },
+    { "pattern": "^@(?:init|slider|block|sample|serialize|gfx)\\b", "kind": "attribute" },
+    { "pattern": "\\$x[0-9a-fA-F]+", "kind": "number" },
+    { "pattern": "\\$'(?:\\\\.|[^'])'", "kind": "number" },
+    { "pattern": "\\$(?:pi|e|phi)\\b", "kind": "number" }
+  ]
+}
