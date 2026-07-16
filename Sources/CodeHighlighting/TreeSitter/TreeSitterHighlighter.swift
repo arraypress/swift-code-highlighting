@@ -22,6 +22,7 @@ import TreeSitterLua
 import TreeSitterKotlin
 import TreeSitterDart
 import TreeSitterDockerfile
+import TreeSitterSwift
 
 /// Tree-sitter–backed highlighter: parses the buffer into a syntax tree and
 /// applies colors from the grammar's `highlights.scm` query. Correct across the
@@ -80,6 +81,7 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         m[.kotlin]     = g(tree_sitter_kotlin(),     "TreeSitterKotlin")
         m[.dart]       = g(tree_sitter_dart(),       "TreeSitterDart")
         m[.dockerfile] = g(tree_sitter_dockerfile(), "TreeSitterDockerfile")
+        m[.swift]      = g(tree_sitter_swift(),      "TreeSitterSwift")
         return m
     }()
 

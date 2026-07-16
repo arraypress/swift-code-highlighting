@@ -34,6 +34,7 @@ let package = Package(
         .package(path: "Grammars/tree-sitter-kotlin"),
         .package(path: "Grammars/tree-sitter-dart"),
         .package(path: "Grammars/tree-sitter-dockerfile"),
+        .package(path: "Grammars/tree-sitter-swift"),
     ],
     targets: [
         .target(
@@ -62,6 +63,7 @@ let package = Package(
                 .product(name: "TreeSitterKotlin", package: "tree-sitter-kotlin"),
                 .product(name: "TreeSitterDart", package: "tree-sitter-dart"),
                 .product(name: "TreeSitterDockerfile", package: "tree-sitter-dockerfile"),
+                .product(name: "TreeSitterSwift", package: "tree-sitter-swift"),
             ],
             path: "Sources"
         ),
