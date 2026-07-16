@@ -28,12 +28,14 @@ import TreeSitterDockerfile
 /// whole file (no viewport gaps) and far more accurate than regex.
 public final class TreeSitterHighlighter: CodeHighlighter {
     /// A loaded grammar: the language pointer plus its compiled highlight and
-    /// (optional) injection queries.
-    private struct Grammar { let language: SwiftTreeSitter.Language; let highlights: Query; let injections: Query? }
+    /// (optional) injection queries. Internal (not private) so ``HighlightSession``
+    /// can share the loaded grammars and tests can build one from a hand-compiled query.
+    struct Grammar { let language: SwiftTreeSitter.Language; let highlights: Query; let injections: Query? }
 
     /// Grammars we bundle. Add a package + a line here to support a language.
     /// `bundle` is the SwiftPM resource-bundle name: `<Product>_<Product>`.
-    private static let grammars: [CodeLanguage.Language: Grammar] = {
+    /// Internal so ``HighlightSession`` resolves languages through the same table.
+    static let grammars: [CodeLanguage.Language: Grammar] = {
         func queryText(_ product: String, _ file: String = "highlights.scm") -> String? {
             guard let url = queryURL(bundle: "\(product)_\(product)", file: file) else { return nil }
             return try? String(contentsOf: url, encoding: .utf8)
@@ -454,9 +456,10 @@ public final class TreeSitterHighlighter: CodeHighlighter {
     /// `<script>`, HTML in PHP templates, …), depth-limited. All chunks of one
     /// injected language share a single combined parse (see `injectionSites`);
     /// capture ranges therefore stay absolute within `ns` and `offset` is unchanged.
+    /// Internal (not private) so ``HighlightSession`` runs the same injection pass.
     @MainActor
-    private static func applyInjections(_ g: Grammar, tree: MutableTree, source ns: NSString,
-                                        offset: Int, clip: NSRange, into storage: NSTextStorage, depth: Int) {
+    static func applyInjections(_ g: Grammar, tree: MutableTree, source ns: NSString,
+                                offset: Int, clip: NSRange, into storage: NSTextStorage, depth: Int) {
         guard depth < 3, let injQuery = g.injections else { return }
         for site in injectionSites(injQuery, tree: tree, ns: ns) {
             guard let sub = grammarForInjection(site.name) else { continue }

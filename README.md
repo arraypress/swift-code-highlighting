@@ -5,6 +5,7 @@ Syntax highlighting for macOS `NSTextStorage`, with two backends behind one `Cod
 ## Features
 
 - 🌳 **Tree-sitter highlighting** — `TreeSitterHighlighter` parses the whole buffer and applies each grammar's `highlights.scm` (later-pattern-wins precedence, `#eq?`/`#match?` predicates resolved), with recursive injection highlighting for embedded languages (CSS/JS in HTML, HTML in PHP, …)
+- ⚡ **Incremental sessions** — `HighlightSession` keeps the parsed tree alive between highlight passes: the document parses **once**, viewport re-highlights while scrolling run the query against the cached tree (no re-parse), and `noteEdit(range:replacementLength:newText:)` re-parses **incrementally** via tree-sitter's `tree.edit`; `invalidate()` forces one fresh parse after a reload (injected sub-languages still re-parse per pass)
 - 🎨 **Regex fallback** — `SyntaxHighlighter` colors an `NSTextStorage` in place with per-language rule tables plus family-level rules (c-like, ruby-like, lisp-like, ml-like, shell, markup, config, sql, tex, data) for everything else; strings and comments are resolved in one left-to-right scan so neither can repaint the other
 - 🔎 **Symbol extraction** — `TreeSitterHighlighter.symbols(in:language:)` returns every definition (`Symbol`: name, `SymbolKind`, range, line) via the hand-written `SymbolQueries`, for outlines and Go-to-Symbol
 - 🗂️ **Project-wide index** — `ProjectSymbolIndex` builds a name → `DefLocation` map over a whole tree on a background queue (skips `.git`/`node_modules`/…, 500 KB and 5000-file caps), with incremental `updateFile(_:)` and superseding rebuilds, for cross-file Go-to-Definition
@@ -64,6 +65,25 @@ let language = CodeLanguage.Language.detect(for: fileURL)
 let highlighter: CodeHighlighter = TreeSitterHighlighter(language: language)
     ?? SyntaxHighlighter(language: language, colors: MyColors())
 highlighter.highlight(textView.textStorage!, in: editedRange)   // main thread
+```
+
+### Incremental highlighting for large files
+
+`TreeSitterHighlighter.highlight` re-parses the whole buffer every call. For big documents that are re-highlighted per viewport while scrolling, hold a `HighlightSession` per open file instead — it parses once and then only runs the query:
+
+```swift
+// One session per (document, language); nil when no grammar is bundled.
+let session = HighlightSession(language: language)
+
+// First call parses the document once; every later call reuses the tree.
+session?.highlight(in: storage, text: storage.string, clip: viewportRange)   // main thread
+
+// After each storage mutation, describe the edit (old-text coordinates) and
+// hand over the full new text — tree-sitter re-parses only what changed.
+session?.noteEdit(range: replacedRange, replacementLength: insertedLength, newText: storage.string)
+
+// On reload / external change / language switch: drop the tree.
+session?.invalidate()
 ```
 
 ### Symbols, hover docs, breadcrumbs
