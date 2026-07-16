@@ -49,11 +49,18 @@ public final class TreeSitterHighlighter: CodeHighlighter {
             func build(_ src: String) -> Query? {
                 src.isEmpty ? nil : try? Query(language: language, data: Data(src.utf8))
             }
+            // Highlights are PRUNED before compiling: patterns that can never
+            // paint (all captures map to nil colors) still cost a cursor match
+            // per occurrence — see `prunedQuerySource`. Injections must NOT be
+            // pruned: their `@injection.*` captures map to no color by design.
+            func buildHighlights(_ src: String) -> Query? {
+                src.isEmpty ? nil : build(prunedQuerySource(src))
+            }
             // `extra` is a Sidewatch supplementary query appended last → wins under
             // later-pattern-wins precedence (e.g. distinguishing JSON keys from values).
             let own = (queryText(product) ?? "") + (extra.isEmpty ? "" : "\n" + extra)
             let combined = inherits.compactMap { queryText($0) }.joined(separator: "\n") + "\n" + own
-            guard let highlights = build(combined) ?? build(own) else { return nil }
+            guard let highlights = buildHighlights(combined) ?? buildHighlights(own) else { return nil }
             var injSrc = queryText(product, "injections.scm") ?? ""
             if injectHTMLText { injSrc += "\n((text) @injection.content (#set! injection.language \"html\"))\n" }
             return Grammar(language: language, highlights: highlights, injections: injSrc.isEmpty ? nil : build(injSrc))
@@ -360,6 +367,9 @@ public final class TreeSitterHighlighter: CodeHighlighter {
 
     /// Reparses the whole buffer and recolors the lines that intersect
     /// `editedRange` (expanded to whole lines), including injected languages.
+    /// Colors are applied diff-aware (see `applyResolved`): only ranges whose
+    /// color actually changes are written, so unchanged regions cost TextKit
+    /// nothing to reconcile.
     /// - Note: Must be called on the main thread (the resolving query cursor is
     ///   main-actor-isolated). Only `.foregroundColor` is touched, never `.font`.
     public func highlight(_ storage: NSTextStorage, in editedRange: NSRange) {
@@ -371,13 +381,15 @@ public final class TreeSitterHighlighter: CodeHighlighter {
 
         guard let tree = parser.parse(storage.string) else { return }
 
-        storage.addAttribute(.foregroundColor, value: HighlightTheme.colors.foreground,
-                             range: NSIntersectionRange(range, full))
-
         // ResolvingQueryCursor is main-actor-isolated; highlight() only runs on main.
         MainActor.assumeIsolated {
-            Self.applyQuery(grammar.highlights, tree: tree, source: ns, offset: 0, clip: range, into: storage)
-            Self.applyInjections(grammar, tree: tree, source: ns, offset: 0, clip: range, into: storage, depth: 0)
+            var base = 0
+            var hits = Self.collectHits(grammar.highlights, tree: tree, source: ns,
+                                        offset: 0, clip: range, nextBase: &base)
+            hits += Self.collectInjectionHits(grammar, tree: tree, source: ns,
+                                              offset: 0, clip: range, depth: 0, nextBase: &base)
+            Self.applyResolved(hits: hits, clip: NSIntersectionRange(range, full),
+                               defaultColor: HighlightTheme.colors.foreground, into: storage)
         }
     }
 
@@ -408,9 +420,15 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         return NSColor(srgbRed: r, green: g, blue: b, alpha: a)
     }
 
+    /// One resolved capture hit: an absolute storage range, its precedence key,
+    /// and the color it paints. `pattern` is the capture's patternIndex plus the
+    /// pass's base (see `collectHits`), so hits from several query passes sort
+    /// into the same later-wins order the old sequential application produced.
+    typealias Hit = (range: NSRange, pattern: Int, color: NSColor)
+
     /// Runs a highlights query over `tree` (parsed from `source`), resolving
-    /// predicates and applying colors offset into `storage` by `offset`, clipped
-    /// to `clip`. Later query patterns win over generic catch-alls.
+    /// predicates, and returns the colored capture hits offset into storage
+    /// coordinates by `offset`, clipped to `clip`.
     ///
     /// The query cursor is **bounded to the clip** (translated into source
     /// coordinates; bytes = UTF-16 index × 2 — the load-bearing SwiftTreeSitter
@@ -419,30 +437,99 @@ public final class TreeSitterHighlighter: CodeHighlighter {
     /// file (~2.4 s on a 2.8 MB Swift file) only to clip them at paint time.
     /// `ts_query_cursor_set_byte_range` keeps every match that *intersects* the
     /// range, so edge-straddling tokens still arrive and the paint-time clipping
-    /// in `apply(hits:clip:into:)` trims them exactly as before.
-    /// Internal (not private) so tests can drive it with a hand-built query.
+    /// trims them exactly as before.
+    ///
+    /// Each call consumes one precedence window from `nextBase`: returned hit
+    /// `pattern`s start at the current base, and `nextBase` advances so a later
+    /// pass (an injection) always outranks this one — exactly the "applied
+    /// afterwards, overwrites on overlap" behavior of sequential application.
     @MainActor
-    static func applyQuery(_ query: Query, tree: MutableTree, source ns: NSString,
-                           offset: Int, clip: NSRange, into storage: NSTextStorage) {
-        guard clip.length > 0 else { return }   // nothing can paint inside an empty clip
+    static func collectHits(_ query: Query, tree: MutableTree, source ns: NSString,
+                            offset: Int, clip: NSRange, nextBase: inout Int) -> [Hit] {
+        let base = nextBase
+        nextBase += 1_000_000
+        guard clip.length > 0 else { return [] }   // nothing can paint inside an empty clip
         let cursor = query.execute(in: tree)
         // Clip in source (query) coordinates, clamped to the source bounds.
         let lower = min(max(0, clip.location - offset), ns.length)
         let upper = min(max(lower, NSMaxRange(clip) - offset), ns.length)
-        guard upper > lower else { return }     // the clip lies wholly outside this source
+        guard upper > lower else { return [] }     // the clip lies wholly outside this source
         cursor.setRange(NSRange(location: lower, length: upper - lower))
         let resolving = ResolvingQueryCursor(cursor: cursor)
         resolving.prepare(with: { r, _ in NSMaxRange(r) <= ns.length ? ns.substring(with: r) : nil })
-        var hits: [(range: NSRange, pattern: Int, color: NSColor)] = []
+        var hits: [Hit] = []
         while let match = resolving.next() {
             for capture in match.captures {
                 guard let name = capture.name, let color = color(for: name) else { continue }
                 let r = capture.range
                 guard r.length > 0, NSMaxRange(r) <= ns.length else { continue }
-                hits.append((NSRange(location: offset + r.location, length: r.length), capture.patternIndex, color))
+                hits.append((NSRange(location: offset + r.location, length: r.length),
+                             base + capture.patternIndex, color))
             }
         }
-        apply(hits: hits, clip: clip, into: storage)
+        return hits
+    }
+
+    /// Query-then-paint in one call — the pre-collect pipeline, kept as the
+    /// hand-built-query seam for tests (`dumpCaptures` has its own loop and the
+    /// product paths use `collectHits` + `applyResolved`).
+    @MainActor
+    static func applyQuery(_ query: Query, tree: MutableTree, source ns: NSString,
+                           offset: Int, clip: NSRange, into storage: NSTextStorage) {
+        var base = 0
+        apply(hits: collectHits(query, tree: tree, source: ns, offset: offset,
+                                clip: clip, nextBase: &base),
+              clip: clip, into: storage)
+    }
+
+    /// Applies the RESOLVED highlight state of `clip` — `defaultColor` overlaid
+    /// by `hits`, higher `pattern` winning on overlap — as the MINIMAL set of
+    /// attribute writes: desired colors are computed first, then compared run by
+    /// run against what the storage already holds, and only differing ranges are
+    /// written. Post-state is identical to the old "blanket foreground reset +
+    /// one addAttribute per hit" pipeline, but a pass over an already-settled
+    /// viewport produces ZERO writes — so `endEditing` never fires processEditing,
+    /// TextKit 2 invalidates nothing, and no fragment re-layout follows. That
+    /// reconcile was the single largest cost of every scroll re-highlight
+    /// (~19–41 ms per pass measured on a 2.8 MB file, scaling with hit density).
+    static func applyResolved(hits: [Hit], clip: NSRange, defaultColor: NSColor,
+                              into storage: NSTextStorage) {
+        let clipped = NSIntersectionRange(clip, NSRange(location: 0, length: storage.length))
+        guard clipped.length > 0 else { return }
+
+        // Desired color per position, painted in ascending precedence so later
+        // patterns overwrite earlier ones — same math as sequential application.
+        var desired = ContiguousArray<NSColor?>(repeating: nil, count: clipped.length)
+        for hit in hits.sorted(by: { $0.pattern < $1.pattern }) {
+            let r = NSIntersectionRange(hit.range, clipped)
+            guard r.length > 0 else { continue }
+            for i in (r.location - clipped.location)..<(NSMaxRange(r) - clipped.location) {
+                desired[i] = hit.color
+            }
+        }
+
+        // Diff desired runs against the storage's existing colors; collect only
+        // the mismatching ranges. Runs are merged by object identity (theme
+        // colors are stable per role), with isEqual deciding an actual rewrite.
+        var writes: [(range: NSRange, color: NSColor)] = []
+        storage.enumerateAttribute(.foregroundColor, in: clipped, options: []) { value, range, _ in
+            let existing = value as? NSColor
+            var i = range.location
+            while i < NSMaxRange(range) {
+                let want = desired[i - clipped.location] ?? defaultColor
+                var j = i + 1
+                while j < NSMaxRange(range), (desired[j - clipped.location] ?? defaultColor) === want { j += 1 }
+                if !(existing === want), !(existing?.isEqual(want) ?? false) {
+                    if let last = writes.last, NSMaxRange(last.range) == i, last.color === want {
+                        writes[writes.count - 1].range.length += j - i   // coalesce across run seams
+                    } else {
+                        writes.append((NSRange(location: i, length: j - i), want))
+                    }
+                }
+                i = j
+            }
+        }
+        for w in writes { storage.addAttribute(.foregroundColor, value: w.color, range: w.range) }
     }
 
     /// Applies collected capture hits: later `patternIndex` wins (hits are applied
@@ -527,15 +614,20 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         return p.parse(ns as String)
     }
 
-    /// Recursively highlights embedded languages (CSS in `<style>`, JS in
+    /// Recursively collects hits for embedded languages (CSS in `<style>`, JS in
     /// `<script>`, HTML in PHP templates, …), depth-limited. All chunks of one
     /// injected language share a single combined parse (see `injectionSites`);
     /// capture ranges therefore stay absolute within `ns` and `offset` is unchanged.
+    /// Visit order matches the old sequential-application order (site, then its
+    /// nested injections, depth-first), and every pass takes a later `nextBase`
+    /// window, so deeper/later passes win on overlap exactly as before.
     /// Internal (not private) so ``HighlightSession`` runs the same injection pass.
     @MainActor
-    static func applyInjections(_ g: Grammar, tree: MutableTree, source ns: NSString,
-                                offset: Int, clip: NSRange, into storage: NSTextStorage, depth: Int) {
-        guard depth < 3, let injQuery = g.injections else { return }
+    static func collectInjectionHits(_ g: Grammar, tree: MutableTree, source ns: NSString,
+                                     offset: Int, clip: NSRange, depth: Int,
+                                     nextBase: inout Int) -> [Hit] {
+        guard depth < 3, let injQuery = g.injections else { return [] }
+        var hits: [Hit] = []
         let sourceClip = NSRange(location: max(0, clip.location - offset), length: clip.length)
         for site in injectionSites(injQuery, tree: tree, ns: ns, clip: sourceClip) {
             guard let sub = grammarForInjection(site.name) else { continue }
@@ -543,9 +635,125 @@ public final class TreeSitterHighlighter: CodeHighlighter {
                 NSIntersectionRange(NSRange(location: offset + $0.location, length: $0.length), clip).length > 0
             }) else { continue }
             guard let subTree = combinedParse(sub, ns: ns, ranges: site.ranges) else { continue }
-            applyQuery(sub.highlights, tree: subTree, source: ns, offset: offset, clip: clip, into: storage)
-            applyInjections(sub, tree: subTree, source: ns, offset: offset, clip: clip, into: storage, depth: depth + 1)
+            hits += collectHits(sub.highlights, tree: subTree, source: ns,
+                                offset: offset, clip: clip, nextBase: &nextBase)
+            hits += collectInjectionHits(sub, tree: subTree, source: ns, offset: offset,
+                                         clip: clip, depth: depth + 1, nextBase: &nextBase)
         }
+        return hits
+    }
+
+    /// Strips top-level query patterns whose captures ALL map to nil colors
+    /// (punctuation, brackets, operators, …) before the query is compiled.
+    ///
+    /// Those patterns can never paint anything — `color(for:)` drops their
+    /// captures — but the query cursor still yields a match per occurrence.
+    /// On symbol-dense grammars that is real scroll-time cost: the vendored
+    /// Swift query spent ~1/3 of its per-viewport captures (365 of 1096 on a
+    /// 30k-char pass, measured) on punctuation/operator patterns that were
+    /// discarded at paint time. Removing whole patterns preserves precedence:
+    /// later-pattern-wins is *relative* order, which pruning keeps intact.
+    ///
+    /// The parser understands the query grammar shallowly but safely: top-level
+    /// forms (`(...)`, `[...]`, `"literal"`) with their trailing quantifiers and
+    /// `@capture` chains are treated as one pattern; `;` comments are kept;
+    /// anything unrecognized (bare tokens like a stray anchor) is copied
+    /// verbatim, never pruned — unknown syntax can only be kept, not dropped.
+    /// If pruning would leave nothing, the original source is returned.
+    static func prunedQuerySource(_ src: String) -> String {
+        let s = Array(src.unicodeScalars)
+        let n = s.count
+        var out = String.UnicodeScalarView()
+        var kept = 0
+        func isWS(_ c: Unicode.Scalar) -> Bool { c == " " || c == "\n" || c == "\t" || c == "\r" }
+
+        /// Consumes one balanced form starting at `i` (paren/bracket group or
+        /// quoted string), honoring nested strings/comments; returns the index
+        /// one past its end.
+        func consumeForm(_ i: Int) -> Int {
+            var i = i
+            if s[i] == "\"" {
+                i += 1
+                while i < n {
+                    if s[i] == "\\" { i += 2; continue }
+                    if s[i] == "\"" { return i + 1 }
+                    i += 1
+                }
+                return i
+            }
+            var depth = 0
+            while i < n {
+                switch s[i] {
+                case "\"":
+                    i += 1
+                    while i < n, s[i] != "\"" { i += s[i] == "\\" ? 2 : 1 }
+                case "(", "[": depth += 1
+                case ")", "]":
+                    depth -= 1
+                    if depth == 0 { return i + 1 }
+                case ";":
+                    while i < n, s[i] != "\n" { i += 1 }
+                default: break
+                }
+                i += 1
+            }
+            return i
+        }
+
+        var i = 0
+        while i < n {
+            let c = s[i]
+            if isWS(c) {
+                out.append(c); i += 1
+            } else if c == ";" {                               // top-level comment line
+                while i < n, s[i] != "\n" { out.append(s[i]); i += 1 }
+            } else if c == "(" || c == "[" || c == "\"" {      // one pattern
+                let start = i
+                i = consumeForm(i)
+                // Trailing quantifiers and capture chains belong to this pattern.
+                while i < n {
+                    var k = i
+                    while k < n, isWS(s[k]) { k += 1 }
+                    if k < n, s[k] == "?" || s[k] == "*" || s[k] == "+" {
+                        i = k + 1
+                    } else if k < n, s[k] == "@" {
+                        k += 1
+                        while k < n, !isWS(s[k]), s[k] != "(", s[k] != ")",
+                              s[k] != "[", s[k] != "]", s[k] != ";" { k += 1 }
+                        i = k
+                    } else { break }
+                }
+                let chunk = String(String.UnicodeScalarView(s[start..<i]))
+                if patternCanPaint(chunk) {
+                    out.append(contentsOf: chunk.unicodeScalars)
+                    kept += 1
+                }
+                out.append("\n")
+            } else {                                           // unknown bare token: keep verbatim
+                while i < n, !isWS(s[i]) { out.append(s[i]); i += 1 }
+            }
+        }
+        return kept > 0 ? String(out) : src
+    }
+
+    /// Whether any `@capture` in one pattern's text maps to a colored role —
+    /// i.e. whether the pattern can ever contribute a visible hit.
+    private static func patternCanPaint(_ chunk: String) -> Bool {
+        var scalars = Substring(chunk).unicodeScalars[...]
+        while let at = scalars.firstIndex(of: "@") {
+            var j = scalars.index(after: at)
+            var name = ""
+            while j < scalars.endIndex {
+                let c = scalars[j]
+                if c == " " || c == "\n" || c == "\t" || c == "\r" || c == "(" || c == ")"
+                    || c == "[" || c == "]" || c == ";" || c == "\"" { break }
+                name.unicodeScalars.append(c)
+                j = scalars.index(after: j)
+            }
+            if role(for: name) != nil { return true }
+            scalars = scalars[j...]
+        }
+        return false
     }
 
     /// The semantic role for a tree-sitter capture (first dotted component), e.g.

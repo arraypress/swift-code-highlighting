@@ -345,6 +345,134 @@ final class TreeSitterHighlighterTests: XCTestCase {
 }
 
 extension TreeSitterHighlighterTests {
+
+    // MARK: - Query pruning (never-colored patterns removed at build)
+
+    func testPrunedQueryDropsNeverColoredPatternsKeepsColoredOnes() {
+        let src = """
+        ["(" ")"] @punctuation.bracket
+        (identifier) @variable
+        ["+" "-"] @operator
+        "return" @keyword
+        """
+        let pruned = TreeSitterHighlighter.prunedQuerySource(src)
+        XCTAssertFalse(pruned.contains("@punctuation.bracket"), "punctuation can never paint — dropped")
+        XCTAssertFalse(pruned.contains("@operator"), "operators can never paint — dropped")
+        XCTAssertTrue(pruned.contains("(identifier) @variable"))
+        XCTAssertTrue(pruned.contains("\"return\" @keyword"))
+    }
+
+    func testPrunedQueryKeepsPredicatesAndMixedCapturePatterns() {
+        let src = """
+        ((identifier) @constructor
+         (#match? @constructor "^[A-Z]"))
+        (ternary_expression ["?" ":"] @keyword.conditional.ternary)
+        (call ["("] @punctuation.bracket function: (identifier) @function)
+        """
+        let pruned = TreeSitterHighlighter.prunedQuerySource(src)
+        XCTAssertTrue(pruned.contains("#match?"), "predicates travel with their kept pattern")
+        XCTAssertTrue(pruned.contains("@keyword.conditional.ternary"))
+        XCTAssertTrue(pruned.contains("@punctuation.bracket"),
+                      "a pattern with at least one colored capture is kept WHOLE")
+    }
+
+    func testPrunedQueryFallsBackToOriginalWhenNothingWouldRemain() {
+        let src = "[\"(\" \")\"] @punctuation.bracket"
+        XCTAssertEqual(TreeSitterHighlighter.prunedQuerySource(src), src,
+                       "an all-nil query is returned unpruned rather than emptied")
+    }
+
+    func testPrunedQueryPreservesLaterPatternWinsAcrossADroppedPattern() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.python), "Python grammar failed to load")
+        // pattern 1 (punctuation) sits between two colored identifier patterns;
+        // pruning it must not flip the relative precedence of patterns 0 and 2.
+        let pruned = TreeSitterHighlighter.prunedQuerySource("""
+            ((identifier) @variable)
+            ["(" ")"] @punctuation.bracket
+            ((identifier) @function)
+            """)
+        let s = try runQuery(pruned, on: "print(value)")
+        XCTAssertEqual(colorAt(s, 0), .brown, "the later @function pattern still wins after pruning")
+    }
+
+    func testPrunedRealQueryPaintsIdenticallyToUnpruned() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.python), "Python grammar failed to load")
+        let query = """
+            ((identifier) @variable)
+            ["(" ")"] @punctuation.bracket
+            ((identifier) @function (#eq? @function "print"))
+            (string) @string
+            """
+        let text = "print(\"hi\")\nvalue = 1"
+        let a = try runQuery(query, on: text)
+        let b = try runQuery(TreeSitterHighlighter.prunedQuerySource(query), on: text)
+        for i in 0..<(text as NSString).length {
+            XCTAssertEqual(colorAt(a, i), colorAt(b, i), "pruning changed paint at index \(i)")
+        }
+    }
+
+    // MARK: - applyResolved (diff-aware minimal writes)
+
+    func testApplyResolvedProducesResetPlusHitsPostState() {
+        let storage = NSTextStorage(string: "abcdef")
+        // Junk pre-state everywhere: the resolved pass must reset non-hit ranges
+        // to the default and paint hits with later-pattern-wins precedence.
+        storage.addAttribute(.foregroundColor, value: NSColor.systemPink,
+                             range: NSRange(location: 0, length: 6))
+        TreeSitterHighlighter.applyResolved(hits: [
+            (range: NSRange(location: 1, length: 2), pattern: 0, color: .red),
+            (range: NSRange(location: 2, length: 2), pattern: 5, color: .green),
+        ], clip: NSRange(location: 0, length: 6), defaultColor: .black, into: storage)
+        XCTAssertEqual(colorAt(storage, 0), .black, "junk outside hits reset to the default")
+        XCTAssertEqual(colorAt(storage, 1), .red)
+        XCTAssertEqual(colorAt(storage, 2), .green, "later pattern wins the overlap")
+        XCTAssertEqual(colorAt(storage, 3), .green)
+        XCTAssertEqual(colorAt(storage, 4), .black)
+        XCTAssertEqual(colorAt(storage, 5), .black)
+    }
+
+    func testApplyResolvedIsZeroEditsWhenAlreadySettled() {
+        final class EditCounter: NSObject {
+            var count = 0
+            @objc func edited(_ n: Notification) { count += 1 }
+        }
+        let storage = NSTextStorage(string: "let x = 1")
+        let hits: [(range: NSRange, pattern: Int, color: NSColor)] = [
+            (range: NSRange(location: 0, length: 3), pattern: 0, color: .blue),
+            (range: NSRange(location: 4, length: 1), pattern: 1, color: .cyan),
+        ]
+        let clip = NSRange(location: 0, length: storage.length)
+        TreeSitterHighlighter.applyResolved(hits: hits, clip: clip, defaultColor: .black, into: storage)
+
+        let counter = EditCounter()
+        NotificationCenter.default.addObserver(counter, selector: #selector(EditCounter.edited(_:)),
+                                               name: NSTextStorage.didProcessEditingNotification,
+                                               object: storage)
+        defer { NotificationCenter.default.removeObserver(counter) }
+        // Second identical pass: every desired color already matches — the whole
+        // point of the diff-aware apply is that this issues NO storage edits
+        // (TextKit would otherwise re-reconcile the entire clip every scroll pass).
+        TreeSitterHighlighter.applyResolved(hits: hits, clip: clip, defaultColor: .black, into: storage)
+        XCTAssertEqual(counter.count, 0, "a settled viewport re-pass must be zero storage edits")
+        XCTAssertEqual(colorAt(storage, 0), .blue)
+        XCTAssertEqual(colorAt(storage, 4), .cyan)
+        XCTAssertEqual(colorAt(storage, 3), .black)
+    }
+
+    func testApplyResolvedClampsHitsAndClipToStorageBounds() {
+        let storage = NSTextStorage(string: "hello")
+        TreeSitterHighlighter.applyResolved(hits: [
+            (range: NSRange(location: 3, length: 10), pattern: 0, color: .red),   // overruns the end
+        ], clip: NSRange(location: 0, length: 50), defaultColor: .black, into: storage)
+        XCTAssertEqual(colorAt(storage, 3), .red)
+        XCTAssertEqual(colorAt(storage, 4), .red)
+        XCTAssertEqual(colorAt(storage, 0), .black)
+        // Empty storage / empty clip: must not throw.
+        let empty = NSTextStorage(string: "")
+        TreeSitterHighlighter.applyResolved(hits: [], clip: NSRange(location: 0, length: 10),
+                                            defaultColor: .black, into: empty)
+    }
+
     /// Injection chunks of one language must merge into ascending, non-overlapping
     /// ranges before feeding `Parser.includedRanges` — the combined-parse fix that
     /// lets `<section>`…`</section>` pair across a PHP block between them.

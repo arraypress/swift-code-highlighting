@@ -266,11 +266,14 @@ public final class HighlightSession {
     /// cached tree — **no parsing** happens unless this is the first call after
     /// init/``invalidate()``, which parses `text` once.
     ///
-    /// Runs the same pipeline as the stateless highlighter: resets
-    /// `.foregroundColor` inside the clip, applies the grammar's highlights
-    /// query (later pattern wins, predicates resolved), then the recursive
-    /// injection pass (injections re-parse their sub-documents each call — see
-    /// the class note).
+    /// Runs the same pipeline as the stateless highlighter: the grammar's
+    /// highlights query (later pattern wins, predicates resolved) plus the
+    /// recursive injection pass (injections re-parse their sub-documents each
+    /// call — see the class note), resolved into the final per-range colors and
+    /// applied **diff-aware**: only ranges whose color actually changes are
+    /// written, so a pass over an already-settled viewport is zero storage
+    /// edits — TextKit 2 reconciles nothing (see
+    /// ``TreeSitterHighlighter/applyResolved(hits:clip:defaultColor:into:)``).
     ///
     /// - Parameters:
     ///   - storage: the text storage to color. Only `.foregroundColor` is set.
@@ -293,14 +296,17 @@ public final class HighlightSession {
         let clipped = NSIntersectionRange(clip, NSRange(location: 0, length: storage.length))
         guard clipped.length > 0 else { return }
 
-        storage.addAttribute(.foregroundColor, value: HighlightTheme.colors.foreground, range: clipped)
-
         // ResolvingQueryCursor is main-actor-isolated; highlight only runs on main.
         MainActor.assumeIsolated {
-            TreeSitterHighlighter.applyQuery(grammar.highlights, tree: tree, source: ns,
-                                             offset: 0, clip: clipped, into: storage)
-            TreeSitterHighlighter.applyInjections(grammar, tree: tree, source: ns,
-                                                  offset: 0, clip: clipped, into: storage, depth: 0)
+            var base = 0
+            var hits = TreeSitterHighlighter.collectHits(grammar.highlights, tree: tree, source: ns,
+                                                         offset: 0, clip: clipped, nextBase: &base)
+            hits += TreeSitterHighlighter.collectInjectionHits(grammar, tree: tree, source: ns,
+                                                               offset: 0, clip: clipped, depth: 0,
+                                                               nextBase: &base)
+            TreeSitterHighlighter.applyResolved(hits: hits, clip: clipped,
+                                                defaultColor: HighlightTheme.colors.foreground,
+                                                into: storage)
         }
     }
 
