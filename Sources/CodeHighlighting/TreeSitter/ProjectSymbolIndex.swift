@@ -21,6 +21,11 @@ public struct DefLocation {
 public final class ProjectSymbolIndex {
     private var defs: [String: [DefLocation]] = [:]
     private var fileNames: [String: Set<String>] = [:]   // file path → the names it defines
+    /// Every name in `defs`, lowercased and sorted, paired with its original
+    /// spelling — the prefix query's binary-search cursor. nil = stale; rebuilt
+    /// on demand by ``sortedNameCursor()``. See ``definitions(matchingPrefix:limit:)``
+    /// for why the exact-match `defs` dictionary can't serve prefix lookups.
+    private var sortedNames: [(lower: String, name: String)]?
     /// Whether the initial `build(root:)` has completed and installed its results.
     /// `updateFile(_:)` is a no-op until this is true.
     public private(set) var isBuilt = false
@@ -30,11 +35,20 @@ public final class ProjectSymbolIndex {
     /// Creates an empty index; call `build(root:)` to populate it.
     public init() {}
 
-    /// Directory names never descended into during a build.
-    private static let skipDirs: Set<String> = [
+    /// The built-in noise list never descended into during a build.
+    public static let defaultSkipDirs: Set<String> = [
         ".git", ".svn", ".hg", "node_modules", ".build", ".swiftpm", "Pods",
         "DerivedData", "dist", "build", "__pycache__", ".next", ".cache", "vendor",
     ]
+
+    /// Directory names never descended into during a build. Defaults to
+    /// ``defaultSkipDirs``; assign to override (e.g. from a user preference — a
+    /// project with real sources in `dist/` needs it off the list, or its symbols
+    /// never enter the index).
+    ///
+    /// - Important: Global mutable state read by every ``build(root:completion:)``.
+    ///   Set it during start-up; changing it later needs a rebuild to take effect.
+    public static var skipDirs: Set<String> = defaultSkipDirs
 
     /// A path key that stays stable across the file's deletion. `standardizedFileURL`
     /// alone is existence-dependent on macOS (`/private/var/...` is only collapsed
@@ -85,6 +99,7 @@ public final class ProjectSymbolIndex {
                 if self.generation == gen {   // still the newest request → install
                     self.defs = map
                     self.fileNames = files
+                    self.sortedNames = nil   // names replaced wholesale
                     self.isBuilt = true
                 }
                 completion?()
@@ -121,6 +136,7 @@ public final class ProjectSymbolIndex {
                 }
                 for d in newDefs { self.defs[d.name, default: []].append(d) }
                 self.fileNames[path] = names.isEmpty ? nil : names
+                self.sortedNames = nil   // this file's names entered/left `defs`
             }
         }
     }
@@ -130,7 +146,75 @@ public final class ProjectSymbolIndex {
     /// - Note: Read on the main queue — the index installs its updates there.
     public func definitions(of name: String) -> [DefLocation] { defs[name] ?? [] }
 
+    /// One definition per known name starting with `prefix`, case-insensitively,
+    /// alphabetical, at most `limit` of them — the completion popup's
+    /// project-symbol tier. A name defined in several files yields its first
+    /// definition only: the popup wants one row per name, not per site.
+    /// Empty for an empty `prefix` (every symbol is not a suggestion) and
+    /// before the build completes.
+    ///
+    /// Cost is a binary search plus a walk of the matches, NOT a scan of the
+    /// project's symbols: `defs` is keyed for exact lookup, so the names are
+    /// mirrored into ``sortedNames`` — lowercased and sorted once per index
+    /// change, then reused across every keystroke of a typing burst. That
+    /// mirror is what makes this callable on the typing path; the rebuild is
+    /// lazy, so a burst of `updateFile(_:)` calls costs one rebuild total, at
+    /// the next query rather than per file.
+    ///
+    /// - Note: Main queue only — the index installs its updates there, and the
+    ///   cursor cache is not synchronized.
+    public func definitions(matchingPrefix prefix: String, limit: Int = 50) -> [DefLocation] {
+        guard !prefix.isEmpty, limit > 0 else { return [] }
+        let needle = prefix.lowercased()
+        let names = sortedNameCursor()
+        var out: [DefLocation] = []
+        var i = Self.lowerBound(of: needle, in: names)
+        // Sorted by `lower`, so the prefix matches are one contiguous run:
+        // stop at the first name that doesn't match rather than walking on.
+        while i < names.count, names[i].lower.hasPrefix(needle) {
+            if let def = defs[names[i].name]?.first {
+                out.append(def)
+                if out.count >= limit { break }
+            }
+            i += 1
+        }
+        return out
+    }
+
+    /// The lazily-rebuilt sorted name mirror behind ``definitions(matchingPrefix:limit:)``.
+    /// Sorted by the lowercased name (the prefix match is case-insensitive),
+    /// tie-broken by the original spelling so two names differing only in case
+    /// hold a stable order.
+    private func sortedNameCursor() -> [(lower: String, name: String)] {
+        if let cached = sortedNames { return cached }
+        var built: [(lower: String, name: String)] = []
+        built.reserveCapacity(defs.count)
+        for name in defs.keys { built.append((lower: name.lowercased(), name: name)) }
+        built.sort { (a: (lower: String, name: String), b: (lower: String, name: String)) -> Bool in
+            a.lower == b.lower ? a.name < b.name : a.lower < b.lower
+        }
+        sortedNames = built
+        return built
+    }
+
+    /// Index of the first entry whose `lower` sorts at or after `needle` — the
+    /// start of the prefix run, or `names.count` when nothing can match.
+    private static func lowerBound(of needle: String, in names: [(lower: String, name: String)]) -> Int {
+        var low = 0, high = names.count
+        while low < high {
+            let mid = (low + high) / 2
+            if names[mid].lower < needle { low = mid + 1 } else { high = mid }
+        }
+        return low
+    }
+
     /// Drop the index (e.g. on a project-folder switch) so it rebuilds fresh.
     /// Also supersedes any in-flight build so its stale results are discarded.
-    public func invalidate() { generation += 1; defs = [:]; fileNames = [:]; isBuilt = false }
+    public func invalidate() {
+        generation += 1
+        defs = [:]
+        fileNames = [:]
+        sortedNames = nil
+        isBuilt = false
+    }
 }

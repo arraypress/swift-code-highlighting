@@ -82,6 +82,31 @@ final class SymbolIndexTests: XCTestCase {
         XCTAssertEqual(syms.map(\.line), [1, 2, 5, 6, 7, 10], "1-based definition lines")
     }
 
+    /// Line numbers come from ONE forward pass whose cursor only moves forward
+    /// (it used to re-count each symbol's prefix independently, which was
+    /// O(n·m)). Two definitions sharing a line are the case that pass can get
+    /// wrong: the second must not consume the newline the first stopped at.
+    func testSymbolLinesWithTwoDefinitionsOnOneLine() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.javascript), "JS grammar failed to load")
+        let text = "\n\nfunction a() {}  function b() {}\n\nfunction c() {}\n"
+        let syms = TreeSitterHighlighter.symbols(in: text, language: .javascript)
+        XCTAssertEqual(syms.map(\.name), ["a", "b", "c"])
+        XCTAssertEqual(syms.map(\.line), [3, 3, 5], "both share line 3; the blank lines still count")
+    }
+
+    /// The same forward pass over many symbols and many lines — every line must
+    /// be exact, not just the first few.
+    func testSymbolLinesStayExactAcrossManyDefinitions() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.python), "Python grammar failed to load")
+        // One def every 3 lines: def_i sits on line 3i + 1.
+        let count = 200
+        let text = (0..<count).map { "def def_\($0)():\n    pass\n\n" }.joined()
+        let syms = TreeSitterHighlighter.symbols(in: text, language: .python)
+        XCTAssertEqual(syms.count, count)
+        XCTAssertEqual(syms.map(\.line), (0..<count).map { $0 * 3 + 1 })
+        XCTAssertEqual(syms.last?.name, "def_\(count - 1)")
+    }
+
     func testSymbolsSwiftPatternsDoNotOverlap() throws {
         // symbols(...) appends EVERY capture of EVERY match with no dedupe, so a
         // method matching both a generic and a body-scoped pattern would be
@@ -221,5 +246,119 @@ final class SymbolIndexTests: XCTestCase {
         idx.updateFile(file)   // before any build: guarded no-op
         XCTAssertFalse(idx.isBuilt)
         XCTAssertEqual(idx.definitions(of: "alpha").count, 0)
+    }
+
+    // MARK: - Prefix query (the completion popup's project-symbol tier)
+
+    /// Builds an index over one Python file defining `names`, one `def` each.
+    private func makePrefixIndex(names: [String], file: String = "a.py") throws -> (ProjectSymbolIndex, URL) {
+        let dir = makeTempDir()
+        let source = names.map { "def \($0)():\n    pass\n" }.joined()
+        try source.write(to: dir.appendingPathComponent(file), atomically: true, encoding: .utf8)
+        let idx = ProjectSymbolIndex()
+        let built = expectation(description: "build completes")
+        idx.build(root: dir) { built.fulfill() }
+        wait(for: [built], timeout: 10)
+        return (idx, dir)
+    }
+
+    func testPrefixQueryReturnsMatchesAlphabeticallyWithKindAndFile() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.python))
+        let (idx, dir) = try makePrefixIndex(names: ["get_user_by_id", "get_user", "getaway", "set_user"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let hits = idx.definitions(matchingPrefix: "get_")
+        XCTAssertEqual(hits.map(\.name), ["get_user", "get_user_by_id"], "alphabetical; get_ excludes getaway")
+        // The popup renders kind + defining file from these.
+        XCTAssertEqual(hits.first?.kind, .function)
+        XCTAssertEqual(hits.first?.url.lastPathComponent, "a.py")
+    }
+
+    func testPrefixQueryIsCaseInsensitiveAndPreservesSpelling() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.python))
+        let (idx, dir) = try makePrefixIndex(names: ["GetUser", "getFile"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        XCTAssertEqual(idx.definitions(matchingPrefix: "get").map(\.name).sorted(), ["GetUser", "getFile"],
+                       "matches ignore case but results keep the definition's own spelling")
+        XCTAssertEqual(idx.definitions(matchingPrefix: "GETUSER").map(\.name), ["GetUser"])
+    }
+
+    /// The walk stops at the first non-matching name, so a name sorting just
+    /// past the prefix run must not leak in (nor one sorting just before it).
+    func testPrefixQueryExcludesNamesOutsideTheRun() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.python))
+        let (idx, dir) = try makePrefixIndex(names: ["gap", "get", "getx", "gfx", "zzz"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        XCTAssertEqual(idx.definitions(matchingPrefix: "get").map(\.name), ["get", "getx"])
+        XCTAssertTrue(idx.definitions(matchingPrefix: "zzzz").isEmpty, "prefix past every name")
+        XCTAssertTrue(idx.definitions(matchingPrefix: "aaa").isEmpty, "prefix before every name")
+    }
+
+    func testPrefixQueryEmptyPrefixAndZeroLimitYieldNothing() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.python))
+        let (idx, dir) = try makePrefixIndex(names: ["alpha", "beta"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        XCTAssertTrue(idx.definitions(matchingPrefix: "").isEmpty, "every symbol is not a suggestion")
+        XCTAssertTrue(idx.definitions(matchingPrefix: "a", limit: 0).isEmpty)
+    }
+
+    func testPrefixQueryRespectsLimit() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.python))
+        let (idx, dir) = try makePrefixIndex(names: (0..<20).map { "item\($0)" })
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        XCTAssertEqual(idx.definitions(matchingPrefix: "item").count, 20)
+        XCTAssertEqual(idx.definitions(matchingPrefix: "item", limit: 5).count, 5)
+    }
+
+    /// A name defined in several files is one suggestion, not one per site.
+    func testPrefixQueryReturnsOneRowPerName() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.python))
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try "def shared():\n    pass\n".write(to: dir.appendingPathComponent("a.py"), atomically: true, encoding: .utf8)
+        try "def shared():\n    pass\n".write(to: dir.appendingPathComponent("b.py"), atomically: true, encoding: .utf8)
+
+        let idx = ProjectSymbolIndex()
+        let built = expectation(description: "build completes")
+        idx.build(root: dir) { built.fulfill() }
+        wait(for: [built], timeout: 10)
+
+        XCTAssertEqual(idx.definitions(of: "shared").count, 2, "both sites are indexed")
+        XCTAssertEqual(idx.definitions(matchingPrefix: "shar").count, 1, "but the popup gets one row")
+    }
+
+    /// The sorted cursor is cached; an incremental update must invalidate it or
+    /// the popup would keep suggesting a name that no longer exists.
+    func testPrefixQueryFollowsIncrementalUpdate() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.python))
+        let (idx, dir) = try makePrefixIndex(names: ["alpha"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("a.py")
+
+        XCTAssertEqual(idx.definitions(matchingPrefix: "alp").map(\.name), ["alpha"])   // caches the cursor
+
+        try "def alphabet():\n    pass\n".write(to: file, atomically: true, encoding: .utf8)
+        idx.updateFile(file)
+        XCTAssertTrue(waitUntil { idx.definitions(matchingPrefix: "alp").map(\.name) == ["alphabet"] },
+                      "renamed symbol replaces the stale one in the prefix cursor")
+    }
+
+    func testPrefixQueryEmptyAfterInvalidate() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.python))
+        let (idx, dir) = try makePrefixIndex(names: ["alpha"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        XCTAssertFalse(idx.definitions(matchingPrefix: "alp").isEmpty)
+        idx.invalidate()
+        XCTAssertTrue(idx.definitions(matchingPrefix: "alp").isEmpty, "cursor dropped with the index")
+    }
+
+    func testPrefixQueryBeforeBuildIsEmpty() {
+        let idx = ProjectSymbolIndex()
+        XCTAssertTrue(idx.definitions(matchingPrefix: "any").isEmpty)
     }
 }

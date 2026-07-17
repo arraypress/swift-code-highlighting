@@ -236,18 +236,40 @@ public final class TreeSitterHighlighter: CodeHighlighter {
             query = q
         }
         guard let query else { return [] }
-        var out: [Symbol] = []
+        var found: [(name: String, kind: SymbolKind, range: NSRange)] = []
         let cursor = query.execute(in: tree)
         while let match = cursor.next() {
             for capture in match.captures {
                 guard let name = capture.name, let kind = SymbolKind(capture: name) else { continue }
                 let r = capture.range
                 guard r.length > 0, NSMaxRange(r) <= ns.length else { continue }
-                let line = ns.substring(to: r.location).components(separatedBy: "\n").count
-                out.append(Symbol(name: ns.substring(with: r), kind: kind, range: r, line: line))
+                found.append((ns.substring(with: r), kind, r))
             }
         }
-        return out.sorted { $0.range.location < $1.range.location }
+        found.sort { $0.range.location < $1.range.location }
+
+        // Line numbers in ONE forward pass. Counting each symbol's line
+        // independently (`substring(to:).components(separatedBy:)`) copied the
+        // whole prefix and split it into every line PER SYMBOL — O(n·m), which
+        // measured 111 ms on a 125 KB file and over 100 s on 2.8 MB, i.e. the
+        // symbol tier, not the parse, was what made big files unusable. Sorted
+        // ascending, `scanned` only ever moves forward, so this is O(n) total,
+        // read in blocks because `character(at:)` is an ObjC call per index.
+        var out: [Symbol] = []
+        out.reserveCapacity(found.count)
+        var line = 1
+        var scanned = 0
+        var block = [unichar](repeating: 0, count: 4096)
+        for item in found {
+            while scanned < item.range.location {
+                let n = min(block.count, item.range.location - scanned)
+                ns.getCharacters(&block, range: NSRange(location: scanned, length: n))
+                for i in 0..<n where block[i] == 0x0A /* \n */ { line += 1 }
+                scanned += n
+            }
+            out.append(Symbol(name: item.name, kind: item.kind, range: item.range, line: line))
+        }
+        return out
     }
 
     /// For hover-doc: the definition signature + preceding doc comment for `word`,

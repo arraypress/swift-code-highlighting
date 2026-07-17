@@ -9,7 +9,7 @@ Syntax highlighting for macOS `NSTextStorage`, with two backends behind one `Cod
 - 🎨 **Regex fallback** — `SyntaxHighlighter` colors an `NSTextStorage` in place with per-language rule tables plus family-level rules (c-like, ruby-like, lisp-like, ml-like, shell, markup, config, sql, tex, data) for everything else; strings and comments are resolved in one left-to-right scan so neither can repaint the other
 - 📄 **Custom languages** — `CustomLanguageDefinition` decodes a hand-written JSON file describing a niche language (comment markers, string delimiters, keyword lists, raw-regex patterns) and `SyntaxHighlighter(custom:colors:)` compiles it into the same rule tables the built-in languages use — see [Custom languages](#custom-languages)
 - 🔎 **Symbol extraction** — `TreeSitterHighlighter.symbols(in:language:)` returns every definition (`Symbol`: name, `SymbolKind`, range, line) via the hand-written `SymbolQueries`, for outlines and Go-to-Symbol
-- 🗂️ **Project-wide index** — `ProjectSymbolIndex` builds a name → `DefLocation` map over a whole tree on a background queue (skips `.git`/`node_modules`/…, 500 KB and 5000-file caps), with incremental `updateFile(_:)` and superseding rebuilds, for cross-file Go-to-Definition
+- 🗂️ **Project-wide index** — `ProjectSymbolIndex` builds a name → `DefLocation` map over a whole tree on a background queue (skips the settable `ProjectSymbolIndex.skipDirs` — `.git`/`node_modules`/… by default; 500 KB and 5000-file caps), with incremental `updateFile(_:)` and superseding rebuilds, for cross-file Go-to-Definition — plus `definitions(matchingPrefix:limit:)`, a bounded case-insensitive prefix query (binary search over a lazily-rebuilt sorted name mirror) cheap enough to call per keystroke from a completion popup
 - 💬 **Hover docs + breadcrumbs** — `hoverInfo(for:in:language:)` returns a highlighted signature plus the doc comment above it (markers derived from the language's own comment tokens); `breadcrumbs(at:text:language:)` returns the enclosing definition path
 - 🧭 **Structural selection** — `enclosingNodeRange(selection:text:language:)` (Expand Selection) and `siblingRange(of:text:language:forward:)` walk the syntax tree
 - 🖌️ **Theme-agnostic** — you supply colors via `TokenColorProviding`; the process-wide `HighlightTheme.colors` feeds the tree-sitter engine, and colors are read live so a theme change just needs a re-highlight
@@ -113,6 +113,17 @@ index.build(root: projectURL) {          // background build; completion on main
 }
 index.updateFile(changedURL)              // incremental: re-index or drop one file
 index.invalidate()                        // e.g. on project switch
+```
+
+### Prefix query (completion)
+
+```swift
+// Case-insensitive, one DefLocation per matching name, alphabetical, capped.
+// Binary search + a walk of the run — no scan of the project's symbols, so
+// this is safe on a typing path. Read on the main queue.
+for def in index.definitions(matchingPrefix: "getUs", limit: 50) {
+    print(def.name, def.kind.label, def.url.lastPathComponent)   // getUserById function User.swift
+}
 ```
 
 ### Structural selection
