@@ -80,6 +80,7 @@ public enum SymbolQueries {
         .cpp: cpp,
         .csharp: csharp,
         .lua: lua,
+        .swift: swift,
     ]
 
     private static let js = """
@@ -175,5 +176,26 @@ public enum SymbolQueries {
 
     private static let lua = """
     (function_declaration name: (identifier) @function)
+    """
+
+    /// Swift. `class_declaration` is the grammar's node for class/struct/enum/
+    /// extension alike (they differ only by their `declaration_kind` child), so
+    /// one pattern captures all four and they read as `@class` → `.type`.
+    ///
+    /// Patterns must NOT overlap: `symbols(...)` appends every capture of every
+    /// match, so two patterns matching one node would emit the symbol twice. A
+    /// method therefore captures as `@function` from the single
+    /// `function_declaration` pattern (methods and free functions share that
+    /// node) — the same trade every other language here makes. `init`/`deinit`
+    /// and protocol requirements are distinct node types, so they can safely
+    /// carry the finer `@method` kind.
+    private static let swift = """
+    (class_declaration name: (type_identifier) @class)
+    (protocol_declaration name: (type_identifier) @interface)
+    (typealias_declaration name: (type_identifier) @type)
+    (function_declaration name: (simple_identifier) @function)
+    (protocol_function_declaration name: (simple_identifier) @method)
+    (init_declaration "init" @method)
+    (deinit_declaration "deinit" @method)
     """
 }

@@ -53,11 +53,42 @@ final class SymbolIndexTests: XCTestCase {
     }
 
     func testSymbolsUnsupportedLanguageReturnsEmpty() {
-        // No tree-sitter grammar (.swift) and no symbol query (.plainText):
-        // both must degrade to [] rather than crash.
-        XCTAssertEqual(TreeSitterHighlighter.symbols(in: "func f() {}", language: .swift).count, 0)
+        // No grammar AND no symbol query (.plainText), plus an empty buffer in a
+        // fully supported language: both must degrade to [] rather than crash.
+        // (.swift used to be this test's no-grammar case — it has one now, and
+        //  its symbols are covered by testSymbolsSwiftDefinitions below.)
         XCTAssertEqual(TreeSitterHighlighter.symbols(in: "hello", language: .plainText).count, 0)
         XCTAssertEqual(TreeSitterHighlighter.symbols(in: "", language: .python).count, 0, "empty buffer")
+    }
+
+    func testSymbolsSwiftDefinitions() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.swift), "Swift grammar failed to load")
+        let text = """
+        protocol Greeter {
+            func greet()
+        }
+
+        struct Widget {
+            init() {}
+            func render() {}
+        }
+
+        func helper() {}
+        """
+        let syms = TreeSitterHighlighter.symbols(in: text, language: .swift)
+        XCTAssertEqual(syms.map(\.name), ["Greeter", "greet", "Widget", "init", "render", "helper"],
+                       "position order; struct uses the same node as class")
+        XCTAssertEqual(syms.map(\.kind), [.interface, .method, .type, .method, .function, .function])
+        XCTAssertEqual(syms.map(\.line), [1, 2, 5, 6, 7, 10], "1-based definition lines")
+    }
+
+    func testSymbolsSwiftPatternsDoNotOverlap() throws {
+        // symbols(...) appends EVERY capture of EVERY match with no dedupe, so a
+        // method matching both a generic and a body-scoped pattern would be
+        // emitted twice. Guards the Swift query against that regression.
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.swift), "Swift grammar failed to load")
+        let syms = TreeSitterHighlighter.symbols(in: "class C {\n    func m() {}\n}", language: .swift)
+        XCTAssertEqual(syms.map(\.name), ["C", "m"], "no duplicate entry for the method")
     }
 
     // MARK: - ProjectSymbolIndex
