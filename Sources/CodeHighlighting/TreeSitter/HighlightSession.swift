@@ -173,6 +173,16 @@ public final class HighlightSession {
         return TreeSitterHighlighter.breadcrumbs(at: offset, ns: text as NSString, root: root)
     }
 
+    /// Enclosing definition scopes at `offset` (outermost → innermost), each
+    /// with the definition node's START offset in `text` (UTF-16 units), from
+    /// the **cached** tree — the same node walk as ``breadcrumbs(at:text:)``,
+    /// no parse. Backs sticky scroll: the host maps each start offset to the
+    /// definition's header line. Empty until a tree is installed for `text`.
+    public func breadcrumbScopes(at offset: Int, text: String) -> [(name: String, start: Int)] {
+        guard let tree = currentTree(matching: text), let root = tree.rootNode else { return [] }
+        return TreeSitterHighlighter.breadcrumbScopes(at: offset, ns: text as NSString, root: root)
+    }
+
     /// Smallest syntax node range strictly larger than `selection` (Expand
     /// Selection), from the **cached** tree — no parse. Nil until a tree is
     /// installed for `text`.

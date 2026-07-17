@@ -152,6 +152,30 @@ final class TreeSitterHighlighterTests: XCTestCase {
             selection: NSRange(location: len + 10, length: 1), text: text, language: .python))
     }
 
+    /// The scope-position variant must return the SAME names as `breadcrumbs`
+    /// plus each definition node's start offset — sticky scroll maps those to
+    /// header lines, so a wrong start pins the wrong line. The unicode prefix
+    /// keeps the UTF-16 byte→offset conversion honest.
+    func testBreadcrumbScopesCarryDefinitionStartOffsets() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.python), "Python grammar failed to load")
+        let text = "# コメント 🙂\nclass Greeter:\n    def hello(self):\n        pass\n"
+        let ns = text as NSString
+        let grammar = try XCTUnwrap(TreeSitterHighlighter.grammars[.python])
+        let parser = Parser()
+        try parser.setLanguage(grammar.language)
+        let root = try XCTUnwrap(parser.parse(text)?.rootNode)
+        let scopes = TreeSitterHighlighter.breadcrumbScopes(
+            at: ns.range(of: "pass").location, ns: ns, root: root)
+        XCTAssertEqual(scopes.map(\.name), ["Greeter", "hello"])
+        XCTAssertEqual(scopes.map(\.start),
+                       [ns.range(of: "class Greeter").location, ns.range(of: "def hello").location],
+                       "each scope carries its definition node's start offset")
+        XCTAssertEqual(scopes.map(\.name),
+                       TreeSitterHighlighter.breadcrumbs(at: ns.range(of: "pass").location,
+                                                         text: text, language: .python),
+                       "names identical to the breadcrumb path")
+    }
+
     func testBreadcrumbsBeyondEndReturnsEmpty() throws {
         try XCTSkipUnless(TreeSitterHighlighter.supports(.python), "Python grammar failed to load")
         let text = "def f():\n    pass\n"

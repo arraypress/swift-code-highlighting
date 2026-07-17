@@ -23,6 +23,9 @@ import TreeSitterKotlin
 import TreeSitterDart
 import TreeSitterDockerfile
 import TreeSitterSwift
+import TreeSitterScala
+import TreeSitterXML
+import TreeSitterSQL
 
 /// Tree-sitter–backed highlighter: parses the buffer into a syntax tree and
 /// applies colors from the grammar's `highlights.scm` query. Correct across the
@@ -99,6 +102,14 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         m[.dart]       = g(tree_sitter_dart(),       "TreeSitterDart")
         m[.dockerfile] = g(tree_sitter_dockerfile(), "TreeSitterDockerfile")
         m[.swift]      = g(tree_sitter_swift(),      "TreeSitterSwift")
+        m[.scala]      = g(tree_sitter_scala(),      "TreeSitterScala")
+        m[.xml]        = g(tree_sitter_xml(),        "TreeSitterXML")
+        // Upstream's number/float patterns use Lua-style classes ("%d"), which
+        // NSRegularExpression matches literally — so numeric literals stayed on
+        // the earlier `(literal) @string` capture. Re-capture them with a real
+        // regex; appended last, it wins under later-pattern-wins precedence.
+        m[.sql]        = g(tree_sitter_sql(),        "TreeSitterSQL",
+                           extra: "((literal) @number (#match? @number \"^[+-]?\\\\d+(\\\\.\\\\d+)?$\"))")
         return m
     }()
 
@@ -297,19 +308,29 @@ public final class TreeSitterHighlighter: CodeHighlighter {
     /// Tree-walk half of ``breadcrumbs(at:text:language:)``, against an
     /// already-parsed `root`. Internal so ``HighlightSession`` reuses it.
     static func breadcrumbs(at offset: Int, ns: NSString, root: Node) -> [String] {
+        breadcrumbScopes(at: offset, ns: ns, root: root).map(\.name)
+    }
+
+    /// The scope-position variant of ``breadcrumbs(at:ns:root:)`` — the same
+    /// definition-node walk, but each entry also carries the definition node's
+    /// START offset in `ns` (UTF-16 units), outermost → innermost. Hosts map
+    /// that offset to the definition's header line (sticky scroll pins those
+    /// lines; clicking one jumps to it). Internal so ``HighlightSession``
+    /// exposes it against its cached tree.
+    static func breadcrumbScopes(at offset: Int, ns: NSString, root: Node) -> [(name: String, start: Int)] {
         guard offset <= ns.length else { return [] }
         let byteOffset = offset * 2   // UTF-16 index → tree-sitter byte offset
         guard let node = root.descendant(in: UInt32(byteOffset)..<UInt32(byteOffset)) else { return [] }
         let keywords = ["function", "method", "class", "struct", "enum", "interface",
                         "namespace", "module", "impl", "trait", "constructor", "object"]
-        var path: [String] = []
+        var path: [(name: String, start: Int)] = []
         var cur: Node? = node
         while let n = cur {
             let type = n.nodeType ?? ""
             if keywords.contains(where: { type.contains($0) }),
                let nameNode = n.child(byFieldName: "name"),
                NSMaxRange(nameNode.range) <= ns.length {
-                path.insert(ns.substring(with: nameNode.range), at: 0)
+                path.insert((ns.substring(with: nameNode.range), n.range.location), at: 0)
             }
             cur = n.parent
         }

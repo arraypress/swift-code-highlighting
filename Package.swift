@@ -35,6 +35,9 @@ let package = Package(
         .package(path: "Grammars/tree-sitter-dart"),
         .package(path: "Grammars/tree-sitter-dockerfile"),
         .package(path: "Grammars/tree-sitter-swift"),
+        .package(path: "Grammars/tree-sitter-scala"),
+        .package(path: "Grammars/tree-sitter-xml"),
+        .package(path: "Grammars/tree-sitter-sql"),
     ],
     targets: [
         .target(
@@ -64,6 +67,9 @@ let package = Package(
                 .product(name: "TreeSitterDart", package: "tree-sitter-dart"),
                 .product(name: "TreeSitterDockerfile", package: "tree-sitter-dockerfile"),
                 .product(name: "TreeSitterSwift", package: "tree-sitter-swift"),
+                .product(name: "TreeSitterScala", package: "tree-sitter-scala"),
+                .product(name: "TreeSitterXML", package: "tree-sitter-xml"),
+                .product(name: "TreeSitterSQL", package: "tree-sitter-sql"),
             ],
             path: "Sources"
         ),
