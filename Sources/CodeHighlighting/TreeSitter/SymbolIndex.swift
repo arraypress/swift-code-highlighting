@@ -11,11 +11,21 @@ public struct Symbol {
     public let range: NSRange
     /// 1-based line of the definition.
     public let line: Int
+
+    public init(name: String, kind: SymbolKind, range: NSRange, line: Int) {
+        self.name = name
+        self.kind = kind
+        self.range = range
+        self.line = line
+    }
 }
 
 /// The kind of definition a ``Symbol`` represents. `class` maps to ``type``.
 public enum SymbolKind: String {
     case function, method, type, structure, enumeration, interface, module, property, constant, variable
+    /// A Markdown (or other prose) section heading — not a code definition; used by
+    /// the document-heading outline path.
+    case heading
 
     /// Maps a tree-sitter capture name (from the symbol queries below) to a kind.
     public init?(capture: String) {
@@ -46,6 +56,7 @@ public enum SymbolKind: String {
         case .module:              return "shippingbox"
         case .property, .variable: return "diamond"
         case .constant:            return "c.circle"
+        case .heading:             return "number"
         }
     }
 
@@ -55,6 +66,7 @@ public enum SymbolKind: String {
         case .type:        return "class"
         case .structure:   return "struct"
         case .enumeration: return "enum"
+        case .heading:     return ""      // the name is the heading; no kind suffix
         default:           return rawValue
         }
     }
