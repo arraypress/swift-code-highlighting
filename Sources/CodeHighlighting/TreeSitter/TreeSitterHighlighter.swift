@@ -236,14 +236,18 @@ public final class TreeSitterHighlighter: CodeHighlighter {
             query = q
         }
         guard let query else { return [] }
-        var found: [(name: String, kind: SymbolKind, range: NSRange)] = []
+        var found: [(name: String, kind: SymbolKind, range: NSRange, scope: NSRange?)] = []
         let cursor = query.execute(in: tree)
         while let match = cursor.next() {
             for capture in match.captures {
                 guard let name = capture.name, let kind = SymbolKind(capture: name) else { continue }
                 let r = capture.range
                 guard r.length > 0, NSMaxRange(r) <= ns.length else { continue }
-                found.append((ns.substring(with: r), kind, r))
+                // The captured node is the NAME; its parent is the whole declaration —
+                // its range is the scope children nest inside.
+                var scope = capture.node.parent?.range
+                if let s = scope, s.length == 0 || NSMaxRange(s) > ns.length { scope = nil }
+                found.append((ns.substring(with: r), kind, r, scope))
             }
         }
         found.sort { $0.range.location < $1.range.location }
@@ -267,7 +271,7 @@ public final class TreeSitterHighlighter: CodeHighlighter {
                 for i in 0..<n where block[i] == 0x0A /* \n */ { line += 1 }
                 scanned += n
             }
-            out.append(Symbol(name: item.name, kind: item.kind, range: item.range, line: line))
+            out.append(Symbol(name: item.name, kind: item.kind, range: item.range, line: line, scopeRange: item.scope))
         }
         return out
     }
