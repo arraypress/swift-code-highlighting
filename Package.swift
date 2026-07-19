@@ -71,7 +71,11 @@ let package = Package(
                 .product(name: "TreeSitterXML", package: "tree-sitter-xml"),
                 .product(name: "TreeSitterSQL", package: "tree-sitter-sql"),
             ],
-            path: "Sources"
+            path: "Sources",
+            resources: [
+                // Per-language built-in identifier lists for the completion tier.
+                .copy("CodeHighlighting/Builtins"),
+            ]
         ),
         .testTarget(
             name: "CodeHighlightingTests",

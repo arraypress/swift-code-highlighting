@@ -138,7 +138,8 @@ public final class CompletionProvider {
         return Self.rank(partial: partial,
                          fileSymbols: cachedFileSymbols ?? [],
                          projectSymbols: project,
-                         bufferWords: cachedBufferWords ?? [])
+                         bufferWords: cachedBufferWords ?? [],
+                         builtins: LanguageBuiltins.completions(for: language))
     }
 
     // MARK: - Pure ranking / scanning (testable)
@@ -151,6 +152,7 @@ public final class CompletionProvider {
     /// tier.
     public static func rank(partial: String, fileSymbols: [CompletionItem],
                             projectSymbols: [CompletionItem], bufferWords: [String],
+                            builtins: [CompletionItem] = [],
                             cap: Int = maxCandidates) -> [CompletionItem] {
         guard !partial.isEmpty, cap > 0 else { return [] }
         let needle = partial.lowercased()
@@ -168,7 +170,7 @@ public final class CompletionProvider {
             return out.count < cap
         }
 
-        for tier in [fileSymbols, projectSymbols] {
+        for tier in [fileSymbols, projectSymbols, builtins] {
             for item in tier {
                 if !take(item) { return out }
             }

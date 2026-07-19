@@ -107,4 +107,48 @@ final class CompletionTests: XCTestCase {
     func testBufferWordsEmptyForNoIdentifiers() {
         XCTAssertTrue(CompletionProvider.bufferWords(in: "!!! ... ,,,").isEmpty)
     }
+
+    // MARK: - Language built-ins tier
+
+    func testPHPBuiltinsLoadAndPrefixMatch() {
+        let builtins = LanguageBuiltins.completions(for: .php)
+        XCTAssertFalse(builtins.isEmpty, "php.txt should load")
+        XCTAssertTrue(builtins.contains { $0.text == "array_map" })
+        XCTAssertTrue(builtins.contains { $0.text == "preg_match" })
+        // Ranked into completion for a partial.
+        let out = CompletionProvider.rank(partial: "array_", fileSymbols: [], projectSymbols: [],
+                                          bufferWords: [], builtins: builtins)
+        XCTAssertTrue(out.contains { $0.text == "array_map" })
+        XCTAssertTrue(out.contains { $0.text == "array_filter" })
+    }
+
+    func testJavaScriptAndTypeScriptShareBuiltins() {
+        let js = LanguageBuiltins.completions(for: .javascript)
+        let ts = LanguageBuiltins.completions(for: .typescript)
+        XCTAssertFalse(js.isEmpty)
+        XCTAssertEqual(js.map(\.text), ts.map(\.text))   // TS reuses the JS set
+        XCTAssertTrue(js.contains { $0.text == "forEach" })
+    }
+
+    func testPythonBuiltins() {
+        let py = LanguageBuiltins.completions(for: .python)
+        XCTAssertTrue(py.contains { $0.text == "enumerate" })
+        XCTAssertTrue(py.contains { $0.text == "len" })
+    }
+
+    func testUnsupportedLanguageHasNoBuiltins() {
+        XCTAssertTrue(LanguageBuiltins.completions(for: .plainText).isEmpty)
+    }
+
+    func testBuiltinsRankBelowProjectSymbolsAboveBufferWords() {
+        // A file symbol / project symbol named the same as a builtin wins; a bare
+        // buffer word of the same name loses to the builtin.
+        let out = CompletionProvider.rank(
+            partial: "ma",
+            fileSymbols: [], projectSymbols: [item("mainHandler", kind: .function)],
+            bufferWords: ["maybe"],
+            builtins: [item("map", kind: .function)])
+        // Order: project (mainHandler) → builtin (map) → buffer (maybe).
+        XCTAssertEqual(out.map(\.text), ["mainHandler", "map", "maybe"])
+    }
 }
