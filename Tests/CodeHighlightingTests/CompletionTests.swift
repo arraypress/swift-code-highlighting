@@ -140,6 +140,19 @@ final class CompletionTests: XCTestCase {
         XCTAssertTrue(LanguageBuiltins.completions(for: .plainText).isEmpty)
     }
 
+    func testBuiltinSignatureParsedIntoDetail() {
+        // A `name<TAB>signature` line puts the signature in the item's detail
+        // (shown in the popup); only the name is inserted (item.text).
+        let php = LanguageBuiltins.completions(for: .php)
+        let arrayMap = php.first { $0.text == "array_map" }
+        XCTAssertNotNil(arrayMap)
+        XCTAssertEqual(arrayMap?.detail, "array_map(callable $callback, array ...$arrays): array")
+        // A bare-name line has no detail.
+        let isString = php.first { $0.text == "is_string" }
+        XCTAssertNotNil(isString)
+        XCTAssertEqual(isString?.detail, "is_string(mixed $value): bool")
+    }
+
     func testBuiltinsRankBelowProjectSymbolsAboveBufferWords() {
         // A file symbol / project symbol named the same as a builtin wins; a bare
         // buffer word of the same name loses to the builtin.

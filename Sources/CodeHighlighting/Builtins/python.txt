@@ -1,71 +1,70 @@
-# Python built-ins + common stdlib names & methods — identifiers only, for completion.
-abs
-all
-any
-ascii
-bin
-bool
-bytearray
+# Python built-ins + common stdlib — identifier<TAB>signature (tab optional).
+print	print(*values, sep=' ', end='\n', file=sys.stdout, flush=False) -> None
+len	len(obj) -> int
+range	range(stop) | range(start, stop, step) -> range
+enumerate	enumerate(iterable, start=0) -> enumerate
+zip	zip(*iterables, strict=False) -> zip
+map	map(func, *iterables) -> map
+filter	filter(function, iterable) -> filter
+sorted	sorted(iterable, *, key=None, reverse=False) -> list
+reversed	reversed(seq) -> reversed
+sum	sum(iterable, /, start=0) -> number
+min	min(iterable, *, key=None, default=...) -> value
+max	max(iterable, *, key=None, default=...) -> value
+abs	abs(x) -> number
+round	round(number, ndigits=None) -> number
+open	open(file, mode='r', encoding=None) -> file
+isinstance	isinstance(obj, classinfo) -> bool
+issubclass	issubclass(cls, classinfo) -> bool
+getattr	getattr(obj, name, default=...) -> value
+setattr	setattr(obj, name, value) -> None
+hasattr	hasattr(obj, name) -> bool
+type	type(object) | type(name, bases, dict) -> type
+int	int(x=0, base=10) -> int
+float	float(x=0.0) -> float
+str	str(object='') -> str
+bool	bool(x=False) -> bool
+list	list(iterable=()) -> list
+dict	dict(**kwargs) -> dict
+set	set(iterable=()) -> set
+tuple	tuple(iterable=()) -> tuple
+format	format(value, format_spec='') -> str
+repr	repr(obj) -> str
+hash	hash(obj) -> int
+id	id(obj) -> int
+iter	iter(iterable) -> iterator
+next	next(iterator, default=...) -> value
+all	all(iterable) -> bool
+any	any(iterable) -> bool
+chr	chr(i) -> str
+ord	ord(c) -> int
+hex	hex(x) -> str
+bin	bin(x) -> str
+oct	oct(x) -> str
+pow	pow(base, exp, mod=None) -> number
+divmod	divmod(a, b) -> tuple
+input	input(prompt='') -> str
+callable	callable(obj) -> bool
+vars	vars(object) -> dict
+dir	dir(object) -> list
 bytes
-callable
-chr
-classmethod
-compile
+bytearray
+frozenset
 complex
-delattr
-dict
-dir
-divmod
-enumerate
+memoryview
+slice
+super
+property
+staticmethod
+classmethod
+globals
+locals
 eval
 exec
-filter
-float
-format
-frozenset
-getattr
-globals
-hasattr
-hash
-help
-hex
-id
-input
-int
-isinstance
-issubclass
-iter
-len
-list
-locals
-map
-max
-memoryview
-min
-next
-object
-oct
-open
-ord
-pow
-print
-property
-range
-repr
-reversed
-round
-set
-setattr
-slice
-sorted
-staticmethod
-str
-sum
-super
-tuple
-type
-vars
-zip
+compile
+ascii
+delattr
+# common methods (names only — receiver type varies)
 append
 extend
 insert
@@ -90,7 +89,6 @@ discard
 union
 intersection
 difference
-symmetric_difference
 issubset
 issuperset
 startswith
@@ -114,8 +112,6 @@ center
 ljust
 rjust
 zfill
-format
-format_map
 encode
 isdigit
 isalpha
@@ -123,6 +119,8 @@ isalnum
 isspace
 isupper
 islower
+format_map
+# common stdlib modules / names
 os
 sys
 re
@@ -145,7 +143,6 @@ path
 exists
 isfile
 isdir
-join
 dirname
 basename
 abspath
@@ -155,13 +152,11 @@ walk
 getenv
 environ
 argv
-exit
 match
 search
 findall
 finditer
 sub
-compile
 loads
 dumps
 load

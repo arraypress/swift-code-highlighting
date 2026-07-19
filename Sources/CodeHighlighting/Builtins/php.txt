@@ -1,263 +1,107 @@
-# PHP built-in functions (high-frequency subset) — identifiers only, for completion.
-# Expandable: append names, one per line. Lines starting with # are ignored.
-array
-array_chunk
-array_column
-array_combine
-array_count_values
-array_diff
-array_diff_key
-array_fill
-array_fill_keys
-array_filter
-array_flip
-array_intersect
-array_intersect_key
-array_key_exists
-array_key_first
-array_key_last
-array_keys
-array_map
-array_merge
-array_merge_recursive
-array_pad
-array_pop
-array_product
-array_push
-array_rand
-array_reduce
-array_replace
-array_reverse
-array_search
-array_shift
-array_slice
-array_splice
-array_sum
-array_unique
-array_unshift
-array_values
-array_walk
-arsort
-asort
-compact
-count
-current
-end
-extract
-in_array
-key
-krsort
-ksort
-list
-natcasesort
-natsort
-next
-prev
-range
-reset
-rsort
-shuffle
-sort
-uasort
-uksort
-usort
-str_contains
-str_ends_with
-str_starts_with
-str_ireplace
-str_pad
-str_repeat
-str_replace
-str_split
-str_word_count
-strcasecmp
-strcmp
-strip_tags
-stripos
-stripslashes
-stristr
-strlen
-strncmp
-strpos
-strrchr
-strrev
-strripos
-strrpos
-strstr
-strtolower
-strtoupper
-strtr
-substr
-substr_count
-substr_replace
-trim
-ltrim
-rtrim
-ucfirst
-ucwords
-lcfirst
-wordwrap
-nl2br
-number_format
-sprintf
-printf
-vsprintf
-vprintf
-implode
-explode
-join
-htmlspecialchars
-htmlspecialchars_decode
-htmlentities
-html_entity_decode
-addslashes
-preg_match
-preg_match_all
-preg_replace
-preg_replace_callback
-preg_split
-preg_quote
-json_encode
-json_decode
-json_last_error
-json_last_error_msg
-serialize
-unserialize
-is_array
-is_bool
-is_callable
-is_float
-is_int
-is_integer
-is_iterable
-is_null
-is_numeric
-is_object
-is_scalar
-is_string
-gettype
-settype
-intval
-floatval
-boolval
-strval
-empty
-isset
-unset
-abs
-ceil
-floor
-round
-intdiv
-fmod
-max
-min
-pow
-sqrt
-rand
-mt_rand
-random_int
-pi
-sin
-cos
-tan
-log
-log10
-exp
-number_format
-dechex
-hexdec
-decbin
-bindec
-decoct
-octdec
-base_convert
-date
-time
-mktime
-strtotime
-date_create
-date_diff
-date_format
-microtime
-sleep
-usleep
-file_get_contents
-file_put_contents
-fopen
-fclose
-fread
-fwrite
-fgets
-feof
-file_exists
-is_file
-is_dir
-is_readable
-is_writable
-mkdir
-rmdir
-unlink
-rename
-copy
-scandir
-glob
-dirname
-basename
-pathinfo
-realpath
-getcwd
-chdir
-call_user_func
-call_user_func_array
-func_get_args
-func_num_args
-function_exists
-method_exists
-property_exists
-class_exists
-interface_exists
-get_class
-get_parent_class
-get_object_vars
-get_class_methods
-is_a
-is_subclass_of
-spl_autoload_register
-error_reporting
-ini_get
-ini_set
-trigger_error
-set_error_handler
-set_exception_handler
-debug_backtrace
-var_dump
-var_export
-print_r
-gettype
-define
-defined
-constant
-getenv
-putenv
-header
-setcookie
-session_start
-session_destroy
-http_build_query
-parse_url
-parse_str
-urlencode
-urldecode
-rawurlencode
-base64_encode
-base64_decode
-md5
-sha1
-hash
-crc32
-password_hash
-password_verify
-uniqid
-bin2hex
-hex2bin
+# PHP built-ins — identifier<TAB>signature. Lines without a tab complete as names only.
+# Comprehensive-common set; expand via a stub-generation pass for full coverage.
+array_map	array_map(callable $callback, array ...$arrays): array
+array_filter	array_filter(array $array, ?callable $callback = null, int $mode = 0): array
+array_reduce	array_reduce(array $array, callable $callback, mixed $initial = null): mixed
+array_merge	array_merge(array ...$arrays): array
+array_keys	array_keys(array $array, mixed $filter = null): array
+array_values	array_values(array $array): array
+array_key_exists	array_key_exists(mixed $key, array $array): bool
+array_search	array_search(mixed $needle, array $haystack, bool $strict = false): mixed
+array_column	array_column(array $array, mixed $column_key, mixed $index_key = null): array
+array_combine	array_combine(array $keys, array $values): array
+array_slice	array_slice(array $array, int $offset, ?int $length = null, bool $preserve_keys = false): array
+array_splice	array_splice(array &$array, int $offset, ?int $length = null, mixed $replacement = []): array
+array_push	array_push(array &$array, mixed ...$values): int
+array_pop	array_pop(array &$array): mixed
+array_shift	array_shift(array &$array): mixed
+array_unshift	array_unshift(array &$array, mixed ...$values): int
+array_unique	array_unique(array $array, int $flags = SORT_STRING): array
+array_flip	array_flip(array $array): array
+array_reverse	array_reverse(array $array, bool $preserve_keys = false): array
+array_fill	array_fill(int $start_index, int $count, mixed $value): array
+array_diff	array_diff(array $array, array ...$arrays): array
+array_intersect	array_intersect(array $array, array ...$arrays): array
+array_sum	array_sum(array $array): int|float
+array_product	array_product(array $array): int|float
+array_chunk	array_chunk(array $array, int $length, bool $preserve_keys = false): array
+in_array	in_array(mixed $needle, array $haystack, bool $strict = false): bool
+count	count(Countable|array $value, int $mode = COUNT_NORMAL): int
+sort	sort(array &$array, int $flags = SORT_REGULAR): bool
+usort	usort(array &$array, callable $callback): bool
+ksort	ksort(array &$array, int $flags = SORT_REGULAR): bool
+implode	implode(string $separator, array $array): string
+explode	explode(string $separator, string $string, int $limit = PHP_INT_MAX): array
+range	range(mixed $start, mixed $end, int|float $step = 1): array
+compact	compact(mixed ...$var_name): array
+extract	extract(array &$array, int $flags = EXTR_OVERWRITE): int
+str_replace	str_replace(mixed $search, mixed $replace, mixed $subject, int &$count = null): mixed
+str_contains	str_contains(string $haystack, string $needle): bool
+str_starts_with	str_starts_with(string $haystack, string $needle): bool
+str_ends_with	str_ends_with(string $haystack, string $needle): bool
+str_repeat	str_repeat(string $string, int $times): string
+str_pad	str_pad(string $string, int $length, string $pad_string = " ", int $pad_type = STR_PAD_RIGHT): string
+str_split	str_split(string $string, int $length = 1): array
+strlen	strlen(string $string): int
+strpos	strpos(string $haystack, string $needle, int $offset = 0): int|false
+strtolower	strtolower(string $string): string
+strtoupper	strtoupper(string $string): string
+ucfirst	ucfirst(string $string): string
+ucwords	ucwords(string $string, string $separators = " \t\r\n\f\v"): string
+substr	substr(string $string, int $offset, ?int $length = null): string
+trim	trim(string $string, string $characters = " \n\r\t\v\0"): string
+ltrim	ltrim(string $string, string $characters = " \n\r\t\v\0"): string
+rtrim	rtrim(string $string, string $characters = " \n\r\t\v\0"): string
+sprintf	sprintf(string $format, mixed ...$values): string
+printf	printf(string $format, mixed ...$values): int
+number_format	number_format(float $num, int $decimals = 0, string $decimal_separator = ".", string $thousands_separator = ","): string
+preg_match	preg_match(string $pattern, string $subject, array &$matches = null, int $flags = 0, int $offset = 0): int|false
+preg_match_all	preg_match_all(string $pattern, string $subject, array &$matches = null, int $flags = 0, int $offset = 0): int|false
+preg_replace	preg_replace(mixed $pattern, mixed $replacement, mixed $subject, int $limit = -1, int &$count = null): mixed
+preg_replace_callback	preg_replace_callback(mixed $pattern, callable $callback, mixed $subject, int $limit = -1, int &$count = null, int $flags = 0): mixed
+preg_split	preg_split(string $pattern, string $subject, int $limit = -1, int $flags = 0): array|false
+preg_quote	preg_quote(string $str, ?string $delimiter = null): string
+json_encode	json_encode(mixed $value, int $flags = 0, int $depth = 512): string|false
+json_decode	json_decode(string $json, ?bool $associative = null, int $depth = 512, int $flags = 0): mixed
+is_array	is_array(mixed $value): bool
+is_string	is_string(mixed $value): bool
+is_int	is_int(mixed $value): bool
+is_numeric	is_numeric(mixed $value): bool
+is_callable	is_callable(mixed $value, bool $syntax_only = false, string &$callable_name = null): bool
+is_null	is_null(mixed $value): bool
+isset	isset(mixed $var, mixed ...$vars): bool
+empty	empty(mixed $var): bool
+intval	intval(mixed $value, int $base = 10): int
+floatval	floatval(mixed $value): float
+strval	strval(mixed $value): string
+gettype	gettype(mixed $value): string
+abs	abs(int|float $num): int|float
+ceil	ceil(int|float $num): float
+floor	floor(int|float $num): float
+round	round(int|float $num, int $precision = 0, int $mode = PHP_ROUND_HALF_UP): float
+max	max(mixed $value, mixed ...$values): mixed
+min	min(mixed $value, mixed ...$values): mixed
+pow	pow(mixed $num, mixed $exponent): int|float
+sqrt	sqrt(float $num): float
+rand	rand(int $min, int $max): int
+mt_rand	mt_rand(int $min, int $max): int
+random_int	random_int(int $min, int $max): int
+date	date(string $format, ?int $timestamp = null): string
+time	time(): int
+strtotime	strtotime(string $datetime, ?int $baseTimestamp = null): int|false
+microtime	microtime(bool $as_float = false): string|float
+file_get_contents	file_get_contents(string $filename, bool $use_include_path = false, ?resource $context = null, int $offset = 0, ?int $length = null): string|false
+file_put_contents	file_put_contents(string $filename, mixed $data, int $flags = 0, ?resource $context = null): int|false
+file_exists	file_exists(string $filename): bool
+fopen	fopen(string $filename, string $mode, bool $use_include_path = false, ?resource $context = null): resource|false
+dirname	dirname(string $path, int $levels = 1): string
+basename	basename(string $path, string $suffix = ""): string
+htmlspecialchars	htmlspecialchars(string $string, int $flags = ENT_QUOTES|ENT_SUBSTITUTE|ENT_HTML401, ?string $encoding = null, bool $double_encode = true): string
+call_user_func	call_user_func(callable $callback, mixed ...$args): mixed
+array_walk	array_walk(array|object &$array, callable $callback, mixed $arg = null): bool
+var_dump	var_dump(mixed $value, mixed ...$values): void
+print_r	print_r(mixed $value, bool $return = false): string|bool
+str_word_count	str_word_count(string $string, int $format = 0, ?string $characters = null): array|int
+password_hash	password_hash(string $password, string|int|null $algo, array $options = []): string
+password_verify	password_verify(string $password, string $hash): bool
+md5	md5(string $string, bool $binary = false): string

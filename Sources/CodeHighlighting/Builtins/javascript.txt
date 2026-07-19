@@ -1,96 +1,96 @@
-# JavaScript / TypeScript built-ins + common methods & Web APIs — identifiers only.
-# Prefix-matched, so bare method names (map, filter, then…) surface across objects.
+# JavaScript / TypeScript built-ins & methods — identifier<TAB>signature (tab optional).
+# Method receivers vary; signatures show the common (Array/String/Promise) shape.
+map	map(callback: (value, index, array) => U, thisArg?): U[]
+filter	filter(predicate: (value, index, array) => boolean, thisArg?): T[]
+reduce	reduce(callback: (acc, value, index, array) => U, initial?): U
+reduceRight	reduceRight(callback: (acc, value, index, array) => U, initial?): U
+forEach	forEach(callback: (value, index, array) => void, thisArg?): void
+find	find(predicate: (value, index, array) => boolean): T | undefined
+findIndex	findIndex(predicate: (value, index, array) => boolean): number
+some	some(predicate: (value, index, array) => boolean): boolean
+every	every(predicate: (value, index, array) => boolean): boolean
+includes	includes(searchElement, fromIndex?): boolean
+indexOf	indexOf(searchElement, fromIndex?): number
+slice	slice(start?, end?): T[]
+splice	splice(start, deleteCount?, ...items): T[]
+concat	concat(...items): T[]
+join	join(separator?): string
+push	push(...items): number
+pop	pop(): T | undefined
+shift	shift(): T | undefined
+unshift	unshift(...items): number
+sort	sort(compareFn?: (a, b) => number): T[]
+reverse	reverse(): T[]
+flat	flat(depth?): T[]
+flatMap	flatMap(callback: (value, index, array) => U): U[]
+fill	fill(value, start?, end?): T[]
+at	at(index): T | undefined
+keys	keys(): IterableIterator
+values	values(): IterableIterator
+entries	entries(): IterableIterator
+split	split(separator, limit?): string[]
+replace	replace(pattern, replacement): string
+replaceAll	replaceAll(pattern, replacement): string
+trim	trim(): string
+padStart	padStart(targetLength, padString?): string
+padEnd	padEnd(targetLength, padString?): string
+startsWith	startsWith(searchString, position?): boolean
+endsWith	endsWith(searchString, endPosition?): boolean
+repeat	repeat(count): string
+substring	substring(start, end?): string
+toLowerCase	toLowerCase(): string
+toUpperCase	toUpperCase(): string
+charAt	charAt(index): string
+match	match(regexp): RegExpMatchArray | null
+then	then(onFulfilled?, onRejected?): Promise
+catch	catch(onRejected?): Promise
+finally	finally(onFinally?): Promise
+assign	Object.assign(target, ...sources): object
+stringify	JSON.stringify(value, replacer?, space?): string
+parse	JSON.parse(text, reviver?): any
+setTimeout	setTimeout(callback, delay?, ...args): number
+setInterval	setInterval(callback, delay?, ...args): number
+fetch	fetch(input, init?): Promise<Response>
+addEventListener	addEventListener(type, listener, options?): void
+querySelector	querySelector(selectors): Element | null
+querySelectorAll	querySelectorAll(selectors): NodeList
+getElementById	getElementById(id): Element | null
+# globals + names (no signature)
 console
 log
 warn
 error
 info
 debug
-trace
-assert
-table
-group
-groupEnd
-count
-time
-timeEnd
 Object
-keys
-values
-entries
-assign
+Array
+String
+Number
+Math
+JSON
+Promise
+Map
+Set
+WeakMap
+WeakSet
+Symbol
+Date
+RegExp
+isArray
+from
+of
 freeze
 create
 defineProperty
 getPrototypeOf
 fromEntries
 hasOwnProperty
-Array
-isArray
-from
-of
-push
-pop
-shift
-unshift
-slice
-splice
-concat
-join
-reverse
-sort
-indexOf
-lastIndexOf
-includes
-find
-findIndex
-findLast
-filter
-map
-reduce
-reduceRight
-forEach
-some
-every
-flat
-flatMap
-fill
-copyWithin
-at
-String
-charAt
-charCodeAt
-codePointAt
-startsWith
-endsWith
-padStart
-padEnd
-repeat
-replace
-replaceAll
-split
-substring
-substr
-toLowerCase
-toUpperCase
-trim
-trimStart
-trimEnd
-normalize
-localeCompare
-match
-matchAll
-search
-Number
 isInteger
 isFinite
 isNaN
 parseFloat
 parseInt
 toFixed
-toPrecision
-toString
-Math
 abs
 ceil
 floor
@@ -101,113 +101,46 @@ min
 max
 pow
 sqrt
-cbrt
 random
-hypot
-log2
-log10
-sin
-cos
-tan
 PI
-JSON
-parse
-stringify
-Promise
 resolve
 reject
 all
 allSettled
 race
 any
-then
-catch
-finally
 async
 await
-Map
-Set
-WeakMap
-WeakSet
-Symbol
-iterator
-asyncIterator
-Date
-now
-getTime
-getFullYear
-getMonth
-getDate
-getDay
-getHours
-getMinutes
-getSeconds
-toISOString
-toLocaleDateString
-toLocaleTimeString
-RegExp
-test
-exec
-setTimeout
-setInterval
-clearTimeout
-clearInterval
-queueMicrotask
-requestAnimationFrame
-fetch
-Request
-Response
-Headers
-URL
-URLSearchParams
-FormData
-AbortController
-structuredClone
 document
-querySelector
-querySelectorAll
-getElementById
-getElementsByClassName
-getElementsByTagName
-createElement
-createTextNode
-appendChild
-removeChild
-addEventListener
-removeEventListener
-dispatchEvent
-setAttribute
-getAttribute
-removeAttribute
-classList
-textContent
-innerHTML
-innerText
-value
 window
 location
 history
 navigator
 localStorage
 sessionStorage
+createElement
+appendChild
+removeChild
+removeEventListener
+setAttribute
+getAttribute
+classList
+textContent
+innerHTML
+value
 alert
 confirm
 prompt
-open
-close
-postMessage
-getComputedStyle
-matchMedia
-parseInt
-parseFloat
-isNaN
-isFinite
+structuredClone
 encodeURIComponent
 decodeURIComponent
-encodeURI
-decodeURI
-typeof
-instanceof
+URL
+URLSearchParams
+FormData
+AbortController
+requestAnimationFrame
+clearTimeout
+clearInterval
 undefined
 null
 NaN
