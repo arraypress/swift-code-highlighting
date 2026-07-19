@@ -110,6 +110,18 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         // regex; appended last, it wins under later-pattern-wins precedence.
         m[.sql]        = g(tree_sitter_sql(),        "TreeSitterSQL",
                            extra: "((literal) @number (#match? @number \"^[+-]?\\\\d+(\\\\.\\\\d+)?$\"))")
+
+        // Variants that reuse a base grammar — no separate parser is vendored, so a
+        // React/Next or SCSS codebase gets real tree-sitter highlighting instead of the
+        // flat family fallback. The JavaScript grammar parses JSX natively; the
+        // TypeScript parser recovers around JSX tags (better than cLike either way);
+        // SCSS/Sass/Less are CSS supersets the CSS grammar highlights (degrading on
+        // `$vars`/nesting).
+        m[.jsx]  = m[.javascript]
+        m[.tsx]  = m[.typescript]
+        m[.scss] = m[.css]
+        m[.sass] = m[.css]
+        m[.less] = m[.css]
         return m
     }()
 

@@ -400,6 +400,68 @@ public final class SyntaxHighlighter: CodeHighlighter {
                 ("\\b\\d+(\\.\\d+)?\\b", .number),
                 ("@{1,2}[a-zA-Z_]\\w*", .type),
             ]
+        case .gitignore:
+            // No dedicated grammar, so give ignore files (.gitignore/.dockerignore/
+            // .npmignore/…) real coloring: comment lines, the `!` un-ignore prefix,
+            // and glob metacharacters (`*`, `**`, `?`, and `[ranges]`).
+            return [
+                ("#.*$", .comment),
+                ("^\\s*!", .keyword),
+                ("\\*\\*|\\*|\\?", .type),
+                ("\\[[^\\]]*\\]", .type),
+            ]
+        case .vue, .svelte:
+            // Single-file components: tags, interpolation, and framework directives /
+            // blocks. The embedded <script>/<style> aren't separately parsed here.
+            return [
+                ("<!--[\\s\\S]*?-->", .comment),
+                ("\"(?:[^\"\\\\]|\\\\.)*\"", .string),
+                ("'(?:[^'\\\\]|\\\\.)*'", .string),
+                ("\\{[#/:][^}]*\\}", .keyword),                       // {#if}/{/each}/{:else} (Svelte)
+                ("\\{\\{[^}]*\\}\\}", .property),                     // {{ mustache }} (Vue)
+                ("</?[A-Za-z][\\w.-]*", .keyword),                    // tags
+                ("v-[a-z-]+|@[a-z:.-]+|:[a-z-]+|(?:on|bind|use|class):[a-z]+", .attribute),  // directives
+                ("\\b\\d+(\\.\\d+)?\\b", .number),
+            ]
+        case .terraform, .hcl:
+            return [
+                ("#.*$", .comment),
+                ("//.*$", .comment),
+                ("/\\*[\\s\\S]*?\\*/", .comment),
+                ("\"(?:[^\"\\\\]|\\\\.)*\"", .string),
+                ("\\$\\{[^}]*\\}", .property),                        // ${interpolation}
+                ("\\b(resource|variable|provider|module|data|output|locals|terraform|for|in|if|dynamic|count|depends_on|true|false|null)\\b", .keyword),
+                ("^\\s*[a-zA-Z_][\\w-]*(?=\\s*=)", .function),        // attribute keys
+                ("\\b\\d+(\\.\\d+)?\\b", .number),
+            ]
+        case .graphql:
+            return [
+                ("#.*$", .comment),
+                ("\"(?:[^\"\\\\]|\\\\.)*\"", .string),
+                ("\\b(type|query|mutation|subscription|input|enum|interface|union|scalar|fragment|schema|extend|directive|implements|on)\\b", .keyword),
+                ("@\\w+", .attribute),                                // @directives
+                ("\\$[A-Za-z_]\\w*", .property),                      // $variables
+                ("\\b[A-Z]\\w*\\b", .type),                           // Types
+                ("\\b\\d+(\\.\\d+)?\\b", .number),
+            ]
+        case .prisma:
+            return [
+                ("//.*$", .comment),
+                ("\"(?:[^\"\\\\]|\\\\.)*\"", .string),
+                ("\\b(model|enum|datasource|generator|type)\\b", .keyword),
+                ("@@?\\w+", .attribute),                              // @id, @@map, @default…
+                ("\\b[A-Z]\\w*\\b", .type),                           // field types / models
+                ("\\b\\d+(\\.\\d+)?\\b", .number),
+            ]
+        case .protobuf:
+            return [
+                ("//.*$", .comment),
+                ("/\\*[\\s\\S]*?\\*/", .comment),
+                ("\"(?:[^\"\\\\]|\\\\.)*\"", .string),
+                ("\\b(syntax|package|import|public|weak|message|enum|service|rpc|returns|option|repeated|optional|required|reserved|oneof|map|extend|group|stream)\\b", .keyword),
+                ("\\b(double|float|int32|int64|uint32|uint64|sint32|sint64|fixed32|fixed64|sfixed32|sfixed64|bool|string|bytes)\\b", .type),
+                ("\\b\\d+(\\.\\d+)?\\b", .number),
+            ]
         case .toml:
             return [
                 ("#.*$", .comment),
