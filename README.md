@@ -1,6 +1,6 @@
 # Swift Code Highlighting
 
-Syntax highlighting for macOS `NSTextStorage`, with two backends behind one `CodeHighlighter` protocol: a tree-sitter engine driving 22 grammars — 21 vendored as local SwiftPM C targets under `Grammars/` (Bash, C, C++, C#, CSS, Dart, Dockerfile, Go, HTML, Java, JavaScript, Kotlin, Lua, PHP, Python, Ruby, Rust, Swift, TOML, TypeScript, YAML) plus JSON from the upstream package, queries shipped as `.bundle` resources — and a dependency-light regex fallback so **every** language [`CodeLanguage`](https://github.com/arraypress/swift-code-language) recognizes gets sensible coloring. Beyond coloring, the tree-sitter side powers symbol outlines, a project-wide definition index, hover docs, breadcrumbs, and structural selection. Depends on [SwiftTreeSitter](https://github.com/ChimeHQ/SwiftTreeSitter) and `CodeLanguage`; AppKit-only (`NSColor`/`NSTextStorage`).
+Syntax highlighting for macOS `NSTextStorage`, with two backends behind one `CodeHighlighter` protocol: a tree-sitter engine driving 22 grammars — 21 vendored as local SwiftPM C targets under `Grammars/` (Bash, C, C++, C#, CSS, Dart, Dockerfile, Go, HTML, Java, JavaScript, Kotlin, Lua, PHP, Python, Ruby, Rust, Swift, TOML, TypeScript, YAML) plus JSON from the upstream package, queries shipped as `.bundle` resources — and a dependency-light regex fallback so **every** language [`CodeLanguage`](https://github.com/Sidewatch/swift-code-language) recognizes gets sensible coloring. Beyond coloring, the tree-sitter side powers symbol outlines, a project-wide definition index, hover docs, breadcrumbs, and structural selection. Depends on [SwiftTreeSitter](https://github.com/ChimeHQ/SwiftTreeSitter) and `CodeLanguage`; AppKit-only (`NSColor`/`NSTextStorage`).
 
 ## Features
 
@@ -29,7 +29,7 @@ Syntax highlighting for macOS `NSTextStorage`, with two backends behind one `Cod
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/arraypress/swift-code-highlighting.git", from: "1.0.0")
+    .package(url: "https://github.com/Sidewatch/swift-code-highlighting.git", from: "1.0.0")
 ]
 ```
 
