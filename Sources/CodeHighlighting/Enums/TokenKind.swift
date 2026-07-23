@@ -30,4 +30,8 @@ public enum TokenKind: Sendable {
     case variable
     /// Properties, fields, and object keys.
     case property
+    /// Added lines in a diff/patch (themes map this to their diff-added tint).
+    case added
+    /// Removed lines in a diff/patch (themes map this to their diff-removed tint).
+    case removed
 }

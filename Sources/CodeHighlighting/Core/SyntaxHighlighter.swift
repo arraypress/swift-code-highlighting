@@ -475,6 +475,18 @@ public final class SyntaxHighlighter: CodeHighlighter {
                 ("\\b(true|false)\\b", .number),
                 ("\\b\\d+(\\.\\d+)?\\b", .number),
             ]
+        case .diff:
+            // Unified diffs / git patches (`git show`, .patch files). Added/removed
+            // use their dedicated roles so themes paint real diff tints. The +++/---
+            // file headers require a path-ish operand (a/, b/, /dev/null, or a
+            // quoted path) so a removed `-- foo` line ("--- foo") stays a removal.
+            return [
+                ("^(?:diff|index|new file|deleted file|old mode|new mode|rename|similarity|dissimilarity|copy|Binary files|commit|Merge:|Author:|AuthorDate:|Commit:|CommitDate:|Date:|\\\\ No newline).*$", .comment),
+                ("^(?:\\+\\+\\+|---) (?:[ab]/|/dev/null|\").*$", .comment),
+                ("^@@[^\\n]*", .function),
+                ("^\\+(?!\\+\\+ (?:[ab]/|/dev/null|\")).*$", .added),
+                ("^-(?!-- (?:[ab]/|/dev/null|\")).*$", .removed),
+            ]
         default:
             return familyDefs(for: lang.family)
         }

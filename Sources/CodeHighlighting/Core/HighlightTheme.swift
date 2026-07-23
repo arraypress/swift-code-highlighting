@@ -41,6 +41,8 @@ public struct DefaultTokenColors: TokenColorProviding {
         case .attribute:return .systemTeal
         case .variable: return .labelColor
         case .property: return .systemIndigo
+        case .added:    return .systemGreen
+        case .removed:  return .systemRed
         }
     }
     /// The default text color (`labelColor`, so it tracks light/dark mode).

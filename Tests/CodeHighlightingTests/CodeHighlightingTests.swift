@@ -15,6 +15,7 @@ private struct MockColors: TokenColorProviding {
     static let map: [TokenKind: NSColor] = [
         .comment: .red, .string: .green, .keyword: .blue, .type: .purple,
         .number: .orange, .function: .brown, .attribute: .magenta,
+        .added: .cyan, .removed: .yellow,
     ]
     func color(for kind: TokenKind) -> NSColor { MockColors.map[kind]! }
     var foreground: NSColor { .black }
@@ -31,6 +32,38 @@ final class CodeHighlightingTests: XCTestCase {
         let storage = NSTextStorage(string: text)
         hl.highlight(storage, in: NSRange(location: 0, length: storage.length))
         return storage
+    }
+
+    func testDiffPatchRoles() {
+        let text = """
+        commit 1234abcd
+        Author: Dev <d@example.com>
+        diff --git a/x.swift b/x.swift
+        index 1111111..2222222 100644
+        --- a/x.swift
+        +++ b/x.swift
+        @@ -1,2 +1,2 @@ func body
+         context line
+        -let a = 1
+        +let a = 2
+        --- deleted sql comment
+        +++ added sql comment
+        """
+        let s = highlighted(text, .diff)
+        let ns = text as NSString
+        XCTAssertEqual(colorAt(s, ns.range(of: "commit").location), .red, "commit header is chrome")
+        XCTAssertEqual(colorAt(s, ns.range(of: "diff --git").location), .red, "diff header is chrome")
+        XCTAssertEqual(colorAt(s, ns.range(of: "--- a/x.swift").location), .red, "old-file header is chrome")
+        XCTAssertEqual(colorAt(s, ns.range(of: "+++ b/x.swift").location), .red, "new-file header is chrome")
+        XCTAssertEqual(colorAt(s, ns.range(of: "@@ -1,2").location), .brown, "hunk header")
+        XCTAssertEqual(colorAt(s, ns.range(of: "-let a = 1").location), .yellow, "removed line")
+        XCTAssertEqual(colorAt(s, ns.range(of: "+let a = 2").location), .cyan, "added line")
+        XCTAssertEqual(colorAt(s, ns.range(of: " context line").location), .black, "context stays plain")
+        // A removed/added line whose CONTENT starts with -- / ++ is not a file header.
+        XCTAssertEqual(colorAt(s, ns.range(of: "--- deleted sql comment").location), .yellow,
+                       "removed `-- …` line is a removal, not a header")
+        XCTAssertEqual(colorAt(s, ns.range(of: "+++ added sql comment").location), .cyan,
+                       "added `++ …` line is an addition, not a header")
     }
 
     func testSwiftKeywordCommentAndNumber() {

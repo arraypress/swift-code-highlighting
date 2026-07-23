@@ -37,6 +37,8 @@ private struct AllKindMockColors: TokenColorProviding {
         case .attribute: return .magenta
         case .variable:  return .cyan
         case .property:  return .yellow
+        case .added:     return .systemGreen
+        case .removed:   return .systemRed
         }
     }
     var foreground: NSColor { .black }
