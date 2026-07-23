@@ -23,6 +23,7 @@ import AppKit
 import CodeLanguage
 import SwiftTreeSitter
 import TreeSitterTSX
+import TreeSitterMarkdownInline
 @testable import CodeHighlighting
 
 /// Covers every TokenKind so capture→color mapping can be asserted exactly.
@@ -528,6 +529,121 @@ extension TreeSitterHighlighterTests {
         let empty = NSTextStorage(string: "")
         TreeSitterHighlighter.applyResolved(hits: [], clip: NSRange(location: 0, length: 10),
                                             defaultColor: .black, into: empty)
+    }
+
+    // MARK: - Vendored JSON grammar (.json + .jsonc routing)
+
+    func testJSONCRoutesToTheSharedJSONGrammar() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.json), "JSON grammar failed to load")
+        XCTAssertTrue(TreeSitterHighlighter.supports(.jsonc), ".jsonc must route to the JSON grammar")
+        XCTAssertNotNil(TreeSitterHighlighter(language: .jsonc))
+    }
+
+    func testJSONGrammarParsesJSONCCommentsAsExtras() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.jsonc), "JSON grammar failed to load")
+        // Upstream tree-sitter-json parses // and /* */ comments as extras —
+        // the property JSONC routing relies on: no ERROR nodes anywhere.
+        let text = "// config\n{\"名前\": [1, 2.5e3], /* mid */ \"ok\": true, \"n\": null}"
+        let ns = text as NSString
+        let lang = try XCTUnwrap(TreeSitterHighlighter.tsLanguage(for: .jsonc))
+        let parser = Parser()
+        try parser.setLanguage(lang)
+        let tree = try XCTUnwrap(parser.parse(text))
+        XCTAssertFalse(try XCTUnwrap(tree.rootNode?.sExpressionString).contains("ERROR"),
+                       "JSONC comments must parse as extras, not error recovery")
+        // Keys vs values vs comments through the real apply path (a hand query
+        // standing in for the bundled highlights, same shape as the extra).
+        let s = try runQuery("(comment) @comment\n(pair key: (string) @property)\n((number) @number)",
+                             on: text, language: .jsonc)
+        XCTAssertEqual(colorAt(s, 0), .red, "// comment colored")
+        XCTAssertEqual(colorAt(s, ns.range(of: "\"名前\"").location), .yellow, "CJK key colored as property")
+        XCTAssertEqual(colorAt(s, ns.range(of: "2.5e3").location), .orange, "number colored")
+        XCTAssertEqual(colorAt(s, ns.range(of: "/* mid */").location), .red, "block comment colored")
+    }
+
+    // MARK: - Vendored markdown grammars (dual block + inline parsers)
+
+    func testMarkdownBlockGrammarIsRoutedAndParsesStructure() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.markdown), "markdown grammar failed to load")
+        XCTAssertNotNil(TreeSitterHighlighter(language: .markdown))
+        let text = "# Title\n\n- item\n\n> quote\n\n```swift\nlet x = 1\n```\n"
+        let ns = text as NSString
+        // The block-structure nodes the editor extra re-captures, hand-compiled
+        // (the bundled queries aren't available under `swift test`).
+        let s = try runQuery("""
+            (atx_heading (inline) @keyword)
+            (list_marker_minus) @keyword
+            (block_quote_marker) @comment
+            (fenced_code_block_delimiter) @string
+            (fenced_code_block (info_string (language) @string))
+            """, on: text, language: .markdown)
+        XCTAssertEqual(colorAt(s, ns.range(of: "Title").location), .blue, "heading text captured")
+        XCTAssertEqual(colorAt(s, ns.range(of: "- ").location), .blue, "list marker captured")
+        XCTAssertEqual(colorAt(s, ns.range(of: "> ").location), .red, "quote marker captured")
+        XCTAssertEqual(colorAt(s, ns.range(of: "```").location), .green, "fence delimiter captured")
+        XCTAssertEqual(colorAt(s, ns.range(of: "swift").location), .green, "fence info language captured")
+    }
+
+    func testMarkdownInlineGrammarParsesSpansNatively() throws {
+        // The dedicated INLINE parser (upstream's second grammar in the same
+        // repo): emphasis, code spans, and links must yield real nodes.
+        let lang = SwiftTreeSitter.Language(tree_sitter_markdown_inline())
+        let parser = Parser()
+        try parser.setLanguage(lang)
+        let text = "some `code` with *emph* and [link](https://example.dev)"
+        let ns = text as NSString
+        let tree = try XCTUnwrap(parser.parse(text))
+        XCTAssertFalse(try XCTUnwrap(tree.rootNode?.sExpressionString).contains("ERROR"))
+        let query = try Query(language: lang, data: Data("""
+            (code_span) @string
+            (emphasis) @type
+            (inline_link (link_text) @type (link_destination) @string)
+            """.utf8))
+        let storage = NSTextStorage(string: text)
+        MainActor.assumeIsolated {
+            TreeSitterHighlighter.applyQuery(query, tree: tree, source: ns, offset: 0,
+                                             clip: NSRange(location: 0, length: storage.length), into: storage)
+        }
+        XCTAssertEqual(colorAt(storage, ns.range(of: "`code`").location), .green, "code span")
+        XCTAssertEqual(colorAt(storage, ns.range(of: "*emph*").location), .purple, "emphasis")
+        XCTAssertEqual(colorAt(storage, ns.range(of: "link").location), .purple, "link text")
+        XCTAssertEqual(colorAt(storage, ns.range(of: "https://example.dev").location), .green, "link destination")
+    }
+
+    /// The dual-parser seam end-to-end: the block grammar reports `(inline)`
+    /// injection ranges tagged "markdown_inline", and the standard machinery
+    /// parses ALL of them as ONE inline doc (`Parser.includedRanges`) — spans
+    /// in the first AND last paragraph must both come back as hits, at exact
+    /// UTF-16 positions despite CJK/emoji earlier in the buffer.
+    func testMarkdownInlineInjectionCoversAllInlineChunks() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.markdown), "markdown grammar failed to load")
+        let blockLang = try XCTUnwrap(TreeSitterHighlighter.tsLanguage(for: .markdown))
+        let text = "# 日本語 🙂\n\nfirst `code` span\n\nlast *emph* span\n"
+        let ns = text as NSString
+        let parser = Parser()
+        try parser.setLanguage(blockLang)
+        let tree = try XCTUnwrap(parser.parse(text))
+        // Hand-compiled stand-ins for the bundled queries: the block grammar's
+        // own injections.scm carries exactly this inline pattern.
+        let injections = try Query(language: blockLang, data: Data("""
+            ((inline) @injection.content (#set! injection.language "markdown_inline"))
+            """.utf8))
+        let highlights = try Query(language: blockLang, data: Data("(atx_heading (inline) @keyword)".utf8))
+        let grammar = TreeSitterHighlighter.Grammar(language: blockLang, highlights: highlights,
+                                                    injections: injections)
+        let hits: [TreeSitterHighlighter.Hit] = MainActor.assumeIsolated {
+            var base = 1_000_000
+            return TreeSitterHighlighter.collectInjectionHits(
+                grammar, tree: tree, source: ns, offset: 0,
+                clip: NSRange(location: 0, length: ns.length), depth: 0, nextBase: &base)
+        }
+        // The inline grammar's supplementary query colors these even headless.
+        let code = ns.range(of: "`code`")
+        let emph = ns.range(of: "*emph*")
+        XCTAssertTrue(hits.contains { $0.range == code && $0.color == .green },
+                      "code span in the FIRST inline chunk captured via the injection")
+        XCTAssertTrue(hits.contains { $0.range == emph && $0.color == .purple },
+                      "emphasis in the LAST inline chunk captured — all chunks share one parse")
     }
 
     /// Injection chunks of one language must merge into ascending, non-overlapping

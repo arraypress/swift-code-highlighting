@@ -2,6 +2,8 @@ import AppKit
 import CodeLanguage
 import SwiftTreeSitter
 import TreeSitterJSON
+import TreeSitterMarkdown
+import TreeSitterMarkdownInline
 import TreeSitterCSS
 import TreeSitterJavaScript
 import TreeSitterPython
@@ -41,10 +43,6 @@ public final class TreeSitterHighlighter: CodeHighlighter {
     /// `bundle` is the SwiftPM resource-bundle name: `<Product>_<Product>`.
     /// Internal so ``HighlightSession`` resolves languages through the same table.
     static let grammars: [CodeLanguage.Language: Grammar] = {
-        func queryText(_ product: String, _ file: String = "highlights.scm") -> String? {
-            guard let url = queryURL(bundle: "\(product)_\(product)", file: file) else { return nil }
-            return try? String(contentsOf: url, encoding: .utf8)
-        }
         // `inherits` prepends base grammars' highlights (TS overlays JS; C++ overlays C).
         // `injectHTMLText` adds an HTML injection for inline `text` (PHP templates).
         func g(_ ptr: OpaquePointer?, _ product: String, inherits: [String] = [], injectHTMLText: Bool = false, extra: String = "") -> Grammar? {
@@ -72,6 +70,9 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         var m: [CodeLanguage.Language: Grammar] = [:]
         m[.json]       = g(tree_sitter_json(),       "TreeSitterJSON",
                            extra: "(pair key: (string) @property)\n((number) @number)\n[(true) (false)] @boolean\n(null) @constant.builtin")
+        // JSONC (tsconfig & friends) shares the JSON grammar: upstream
+        // tree-sitter-json parses `//` and `/* */` comments as extras.
+        m[.jsonc]      = m[.json]
         // CSS custom properties (`--brand-primary`) are captured `@variable` upstream
         // with a `^--` guard; the bare-variable role is nil now (see `role(for:)`),
         // so re-capture them as `@property` — sigiled, self-distinguishing tokens
@@ -116,6 +117,25 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         // regex; appended last, it wins under later-pattern-wins precedence.
         m[.sql]        = g(tree_sitter_sql(),        "TreeSitterSQL",
                            extra: "((literal) @number (#match? @number \"^[+-]?\\\\d+(\\\\.\\\\d+)?$\"))")
+        // Markdown is upstream's DUAL parser; this entry is the BLOCK grammar
+        // only (headings, fences, lists, quotes). Its injections.scm routes
+        // every `(inline)` node to the separate inline grammar (see
+        // `markdownInlineGrammar`) and fenced code to the fence's language, so
+        // both ride the standard injection machinery. Upstream's captures are
+        // nvim `@text.*`/`@punctuation.*` roles that map to no color here, so
+        // the extra re-captures the structure with this table's roles,
+        // mirroring the regex tier's markdown palette (headings/list markers
+        // keyword, fences/links string, quote markers/rules comment).
+        m[.markdown]   = g(tree_sitter_markdown(),   "TreeSitterMarkdown", extra: """
+            (atx_heading (inline) @keyword)
+            (setext_heading (paragraph) @keyword)
+            [(atx_h1_marker) (atx_h2_marker) (atx_h3_marker) (atx_h4_marker) (atx_h5_marker) (atx_h6_marker) (setext_h1_underline) (setext_h2_underline)] @keyword
+            [(list_marker_plus) (list_marker_minus) (list_marker_star) (list_marker_dot) (list_marker_parenthesis)] @keyword
+            [(block_quote_marker) (block_continuation) (thematic_break)] @comment
+            [(fenced_code_block_delimiter) (info_string)] @string
+            [(link_destination) (link_title)] @string
+            (link_label) @property
+            """)
 
         // TSX has its OWN vendored parser (upstream's second grammar in the
         // tree-sitter-typescript repo — TypeScript + native JSX) but shares the
@@ -133,6 +153,49 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         // layering), so they route to the dedicated regex rule sets instead.
         return m
     }()
+
+    /// The markdown INLINE grammar — upstream tree-sitter-markdown's second
+    /// parser (emphasis, code spans, links). Deliberately NOT in `grammars`:
+    /// it has no `CodeLanguage.Language` of its own and only runs over the
+    /// `(inline)` ranges the block grammar's injections report. The standard
+    /// combined-parse machinery hosts it — all inline chunks of a document
+    /// parse as ONE doc via `Parser.includedRanges` (upstream's own
+    /// included-ranges guidance), so cross-chunk state stays consistent; the
+    /// accepted constraint is that a delimiter left unclosed in one chunk can,
+    /// at worst, pair with one in a later chunk.
+    static let markdownInlineGrammar: Grammar? = {
+        let language = SwiftTreeSitter.Language(tree_sitter_markdown_inline())
+        // Same reasoning as the block entry's extra: upstream's `@text.*`
+        // captures map to no color, so re-capture with this table's roles,
+        // mirroring the regex tier (code/links string, emphasis type, strong
+        // function). Emphasis/strong come FIRST so an inner code span or link
+        // keeps its own color under later-pattern-wins precedence.
+        let extra = """
+            (emphasis) @type
+            (strong_emphasis) @function
+            (code_span) @string
+            [(link_destination) (uri_autolink)] @string
+            [(link_text) (link_label) (image_description)] @type
+            """
+        // SwiftPM bundle naming is `<Package>_<Target>`: both markdown targets
+        // live in the ONE tree-sitter-markdown package, so the inline bundle is
+        // NOT the `<Product>_<Product>` shape `queryText` assumes.
+        func inlineQuery(_ file: String) -> String? {
+            guard let url = queryURL(bundle: "TreeSitterMarkdown_TreeSitterMarkdownInline", file: file) else { return nil }
+            return try? String(contentsOf: url, encoding: .utf8)
+        }
+        let own = (inlineQuery("highlights.scm") ?? "") + "\n" + extra
+        guard let highlights = try? Query(language: language, data: Data(prunedQuerySource(own).utf8)) else { return nil }
+        let injSrc = inlineQuery("injections.scm") ?? ""
+        let injections = injSrc.isEmpty ? nil : try? Query(language: language, data: Data(injSrc.utf8))
+        return Grammar(language: language, highlights: highlights, injections: injections)
+    }()
+
+    /// Reads a query file's text from a grammar product's resource bundle.
+    private static func queryText(_ product: String, _ file: String = "highlights.scm") -> String? {
+        guard let url = queryURL(bundle: "\(product)_\(product)", file: file) else { return nil }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }
 
     /// Finds a query file inside a grammar's resource bundle, handling both the
     /// flat layout (`swift build`) and the deep layout (Xcode).
@@ -158,6 +221,11 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         case "ruby":                   return grammars[.ruby]
         case "bash", "sh", "shell":    return grammars[.bash]
         case "yaml":                   return grammars[.yaml]
+        case "markdown", "md":         return grammars[.markdown]
+        // The block grammar's injections.scm tags every `(inline)` node with
+        // this pseudo-language; it resolves to the dedicated inline grammar.
+        case "markdown_inline",
+             "markdown-inline":        return markdownInlineGrammar
         default:                       return grammars[CodeLanguage.Language(rawValue: name.lowercased()) ?? .plainText]
         }
     }

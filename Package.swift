@@ -13,7 +13,8 @@ let package = Package(
     dependencies: [
         .package(path: "../swift-code-language"),
         .package(url: "https://github.com/ChimeHQ/SwiftTreeSitter.git", from: "0.8.0"),
-        .package(url: "https://github.com/tree-sitter/tree-sitter-json.git", from: "0.20.0"),
+        .package(path: "Grammars/tree-sitter-json"),
+        .package(path: "Grammars/tree-sitter-markdown"),
         .package(path: "Grammars/tree-sitter-css"),
         .package(path: "Grammars/tree-sitter-javascript"),
         .package(path: "Grammars/tree-sitter-python"),
@@ -46,6 +47,7 @@ let package = Package(
                 .product(name: "CodeLanguage", package: "swift-code-language"),
                 .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
                 .product(name: "TreeSitterJSON", package: "tree-sitter-json"),
+                .product(name: "TreeSitterMarkdown", package: "tree-sitter-markdown"),
                 .product(name: "TreeSitterCSS", package: "tree-sitter-css"),
                 .product(name: "TreeSitterJavaScript", package: "tree-sitter-javascript"),
                 .product(name: "TreeSitterPython", package: "tree-sitter-python"),
@@ -87,6 +89,9 @@ let package = Package(
                 // The TSX language pointer, for the headless JSX-parse test
                 // (the bundled queries aren't available under `swift test`).
                 .product(name: "TreeSitterTypeScript", package: "tree-sitter-typescript"),
+                // The markdown block+inline language pointers, for the headless
+                // dual-parser tests (same bundle caveat as TSX above).
+                .product(name: "TreeSitterMarkdown", package: "tree-sitter-markdown"),
             ],
             path: "Tests",
             resources: [
