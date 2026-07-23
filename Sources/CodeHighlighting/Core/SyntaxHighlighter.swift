@@ -218,6 +218,28 @@ public final class SyntaxHighlighter: CodeHighlighter {
                 ("@(media|import|keyframes|font-face|supports|include|mixin|use|forward)\\b", .keyword),
                 ("[a-z-]+(?=\\s*:)", .type),
             ]
+        case .scss, .sass, .less:
+            // CSS supersets whose variables (`$var` in SCSS/Sass, `@var` in Less)
+            // the CSS tree-sitter grammar turns into ERROR nodes that swallow
+            // neighboring declarations (indented Sass barely parses at all), so
+            // these route here instead of reusing that grammar — see the note by
+            // the grammar table in `TreeSitterHighlighter`. Later rules overwrite
+            // earlier ones: property names paint before the variable rules so
+            // `$primary:` / `@primary:` keep the variable color, and the known
+            // at-keywords repaint over the generic Less `@var` rule.
+            return [
+                ("//.*$", .comment),
+                ("/\\*[\\s\\S]*?\\*/", .comment),
+                ("\"(?:[^\"\\\\]|\\\\.)*\"", .string),
+                ("'(?:[^'\\\\]|\\\\.)*'", .string),
+                ("\\b\\d+(\\.\\d+)?(px|em|rem|%|vh|vw|s|ms|fr|deg)?\\b", .number),
+                ("[.#%][a-zA-Z_-][\\w-]*", .function),                // selectors (+ SCSS %placeholders)
+                ("#[0-9a-fA-F]{3,8}\\b", .number),                    // hex colors, after `#fff`-shaped selectors
+                ("[a-z-]+(?=\\s*:)", .type),                          // property names
+                ("@[a-zA-Z_-][\\w-]*", .property),                    // Less @variables
+                ("@(media|import|charset|namespace|supports|keyframes|font-face|page|include|mixin|function|return|extend|use|forward|if|else|each|for|while|content|at-root|debug|warn|error|plugin)\\b", .keyword),
+                ("\\$[a-zA-Z_-][\\w-]*", .property),                  // SCSS/Sass $variables
+            ]
         case .json:
             return [
                 ("\"(?:[^\"\\\\]|\\\\.)*\"\\s*:", .function),
@@ -478,14 +500,19 @@ public final class SyntaxHighlighter: CodeHighlighter {
         case .diff:
             // Unified diffs / git patches (`git show`, .patch files). Added/removed
             // use their dedicated roles so themes paint real diff tints. The +++/---
-            // file headers require a path-ish operand (a/, b/, /dev/null, or a
-            // quoted path) so a removed `-- foo` line ("--- foo") stays a removal.
+            // file headers require a path-ish operand: the default a/ b/ prefixes,
+            // git's `diff.mnemonicPrefix` i/ w/ c/ o/, /dev/null, a quoted path, or
+            // POSIX `diff -u`'s `file<TAB>timestamp` form — so a removed `-- foo`
+            // line ("--- foo") stays a removal while both git and plain POSIX
+            // headers render as headers. (`diff.noprefix` headers are inherently
+            // ambiguous with that per-line rule; DiffTab's hunk-aware colorizer
+            // handles those.)
             return [
                 ("^(?:diff|index|new file|deleted file|old mode|new mode|rename|similarity|dissimilarity|copy|Binary files|commit|Merge:|Author:|AuthorDate:|Commit:|CommitDate:|Date:|\\\\ No newline).*$", .comment),
-                ("^(?:\\+\\+\\+|---) (?:[ab]/|/dev/null|\").*$", .comment),
+                ("^(?:\\+\\+\\+|---) (?:[abiwco]/|/dev/null|\"|[^\\t\\n]*\\t).*$", .comment),
                 ("^@@[^\\n]*", .function),
-                ("^\\+(?!\\+\\+ (?:[ab]/|/dev/null|\")).*$", .added),
-                ("^-(?!-- (?:[ab]/|/dev/null|\")).*$", .removed),
+                ("^\\+(?!\\+\\+ (?:[abiwco]/|/dev/null|\"|[^\\t\\n]*\\t)).*$", .added),
+                ("^-(?!-- (?:[abiwco]/|/dev/null|\"|[^\\t\\n]*\\t)).*$", .removed),
             ]
         default:
             return familyDefs(for: lang.family)

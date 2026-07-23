@@ -15,7 +15,7 @@ private struct MockColors: TokenColorProviding {
     static let map: [TokenKind: NSColor] = [
         .comment: .red, .string: .green, .keyword: .blue, .type: .purple,
         .number: .orange, .function: .brown, .attribute: .magenta,
-        .added: .cyan, .removed: .yellow,
+        .property: .systemPink, .added: .cyan, .removed: .yellow,
     ]
     func color(for kind: TokenKind) -> NSColor { MockColors.map[kind]! }
     var foreground: NSColor { .black }
@@ -80,6 +80,43 @@ final class CodeHighlightingTests: XCTestCase {
         let s = highlighted(text, .swift)
         let idx = (text as NSString).range(of: "\"hi\"").location
         XCTAssertEqual(colorAt(s, idx), .green, "string literal")
+    }
+
+    func testSCSSVariablesCommentsAndKeywords() {
+        // SCSS routes to the regex tier (the CSS tree-sitter grammar turns
+        // `$vars` into ERROR nodes), so the dedicated rule set must cover
+        // what the grammar tier can't.
+        let text = """
+        // tokens
+        $primary: #336699;
+        .btn { color: $primary; }
+        @include flex(column);
+        """
+        let s = highlighted(text, .scss)
+        let ns = text as NSString
+        XCTAssertEqual(colorAt(s, ns.range(of: "// tokens").location), .red, "line comment")
+        XCTAssertEqual(colorAt(s, ns.range(of: "$primary").location), .systemPink, "declared $variable")
+        XCTAssertEqual(colorAt(s, ns.range(of: "#336699").location), .orange, "hex color")
+        XCTAssertEqual(colorAt(s, ns.range(of: "@include").location), .blue, "SCSS at-keyword")
+        XCTAssertEqual(colorAt(s, ns.range(of: "color").location), .purple, "property name")
+        XCTAssertEqual(colorAt(s, ns.range(of: ".btn").location), .brown, "class selector")
+    }
+
+    func testLessVariablesKeepAtKeywordsDistinct() {
+        let text = "@primary: #336699;\n@media (min-width: 600px) { .a { color: @primary; } }"
+        let s = highlighted(text, .less)
+        let ns = text as NSString
+        XCTAssertEqual(colorAt(s, ns.range(of: "@primary").location), .systemPink, "Less @variable")
+        XCTAssertEqual(colorAt(s, ns.range(of: "@media").location), .blue,
+                       "a known at-keyword repaints over the generic @var rule")
+    }
+
+    func testIndentedSassVariablesColor() {
+        let text = "$x: 4px\n.a\n  margin: $x\n"
+        let s = highlighted(text, .sass)
+        let ns = text as NSString
+        XCTAssertEqual(colorAt(s, ns.range(of: "$x").location), .systemPink, "indented-syntax $variable")
+        XCTAssertEqual(colorAt(s, ns.range(of: "margin").location), .purple, "property name without braces")
     }
 
     func testFamilyFallbackColorsCLikeKeyword() {

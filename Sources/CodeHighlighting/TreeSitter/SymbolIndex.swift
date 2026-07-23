@@ -88,6 +88,12 @@ public enum SymbolQueries {
     public static let sources: [Language: String] = [
         .javascript: js,
         .typescript: ts,
+        // .tsx AND .jsx parse with the TSX grammar (grammars[.jsx] aliases it),
+        // which uses TypeScript's node types — so both take the ts query (the js
+        // query's `(class_declaration name: (identifier))` shape would compile
+        // but never match under it).
+        .tsx: ts,
+        .jsx: ts,
         .python: py,
         .php: php,
         .go: go,

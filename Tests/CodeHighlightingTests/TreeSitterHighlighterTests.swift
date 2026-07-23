@@ -22,6 +22,7 @@ import XCTest
 import AppKit
 import CodeLanguage
 import SwiftTreeSitter
+import TreeSitterTSX
 @testable import CodeHighlighting
 
 /// Covers every TokenKind so capture→color mapping can be asserted exactly.
@@ -224,6 +225,33 @@ final class TreeSitterHighlighterTests: XCTestCase {
                                              offset: offset, clip: clipRange, into: storage)
         }
         return storage
+    }
+
+    func testTSXGrammarParsesJSXNatively() throws {
+        // The dedicated tsx parser (not the TypeScript one, which only
+        // error-recovers around JSX): tags, attributes, components, and
+        // generics must all yield real nodes — an error-free parse.
+        let lang = SwiftTreeSitter.Language(tree_sitter_tsx())
+        let parser = Parser()
+        try parser.setLanguage(lang)
+        let text = "const x = <div className=\"a\">{items.map((i: Item<string>) => <Badge key={i} />)}</div>;"
+        let ns = text as NSString
+        let tree = try XCTUnwrap(parser.parse(text))
+        XCTAssertFalse(try XCTUnwrap(tree.rootNode?.sExpressionString).contains("ERROR"),
+                       "JSX inside generics must parse without error recovery")
+        let query = try Query(language: lang, data: Data("""
+            (jsx_opening_element (identifier) @tag)
+            (jsx_attribute (property_identifier) @attribute)
+            (jsx_self_closing_element (identifier) @type)
+            """.utf8))
+        let storage = NSTextStorage(string: text)
+        MainActor.assumeIsolated {
+            TreeSitterHighlighter.applyQuery(query, tree: tree, source: ns, offset: 0,
+                                             clip: NSRange(location: 0, length: storage.length), into: storage)
+        }
+        XCTAssertEqual(colorAt(storage, ns.range(of: "div").location), .blue, "JSX tag (@tag → keyword)")
+        XCTAssertEqual(colorAt(storage, ns.range(of: "className").location), .yellow, "JSX attribute (@attribute → property)")
+        XCTAssertEqual(colorAt(storage, ns.range(of: "Badge").location), .purple, "self-closing component (@type)")
     }
 
     func testLaterPatternWinsOverEarlierCatchAll() throws {

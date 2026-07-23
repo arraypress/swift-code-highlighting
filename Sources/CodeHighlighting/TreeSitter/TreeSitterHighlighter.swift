@@ -13,6 +13,7 @@ import TreeSitterC
 import TreeSitterJava
 import TreeSitterRuby
 import TreeSitterTypeScript
+import TreeSitterTSX
 import TreeSitterCPP
 import TreeSitterCSharp
 import TreeSitterPHP
@@ -77,7 +78,12 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         // that VS Code keeps colored (same hue family as bash's `$VAR` @property).
         m[.css]        = g(tree_sitter_css(),        "TreeSitterCSS",
                            extra: "((property_name) @property (#match? @property \"^--\"))\n((plain_value) @property (#match? @property \"^--\"))")
-        m[.javascript] = g(tree_sitter_javascript(), "TreeSitterJavaScript")
+        // JSX patterns live in a separate upstream query file the base highlights
+        // don't include; overlay it on every grammar whose parser produces jsx
+        // nodes (the JS grammar parses JSX natively; TSX is TypeScript+JSX).
+        // The patterns only match jsx_* nodes, so non-JSX files are unaffected.
+        let jsx = queryText("TreeSitterJavaScript", "highlights-jsx.scm") ?? ""
+        m[.javascript] = g(tree_sitter_javascript(), "TreeSitterJavaScript", extra: jsx)
         m[.python]     = g(tree_sitter_python(),     "TreeSitterPython")
         m[.rust]       = g(tree_sitter_rust(),       "TreeSitterRust")
         m[.go]         = g(tree_sitter_go(),         "TreeSitterGo")
@@ -111,17 +117,20 @@ public final class TreeSitterHighlighter: CodeHighlighter {
         m[.sql]        = g(tree_sitter_sql(),        "TreeSitterSQL",
                            extra: "((literal) @number (#match? @number \"^[+-]?\\\\d+(\\\\.\\\\d+)?$\"))")
 
-        // Variants that reuse a base grammar — no separate parser is vendored, so a
-        // React/Next or SCSS codebase gets real tree-sitter highlighting instead of the
-        // flat family fallback. The JavaScript grammar parses JSX natively; the
-        // TypeScript parser recovers around JSX tags (better than cLike either way);
-        // SCSS/Sass/Less are CSS supersets the CSS grammar highlights (degrading on
-        // `$vars`/nesting).
-        m[.jsx]  = m[.javascript]
-        m[.tsx]  = m[.typescript]
-        m[.scss] = m[.css]
-        m[.sass] = m[.css]
-        m[.less] = m[.css]
+        // TSX has its OWN vendored parser (upstream's second grammar in the
+        // tree-sitter-typescript repo — TypeScript + native JSX) but shares the
+        // TypeScript query bundle: TS highlights over the JS base, with the JSX
+        // overlay appended last. JSX files use it too — TSX is a superset that
+        // parses plain JSX, and the shared queries keep tags/attributes/components
+        // colored identically across .jsx/.tsx.
+        m[.tsx]  = g(tree_sitter_tsx(), "TreeSitterTypeScript", inherits: ["TreeSitterJavaScript"], extra: jsx)
+        m[.jsx]  = m[.tsx]
+        // SCSS/Sass/Less deliberately have NO entry: the CSS grammar tokenizes
+        // their variables (`$var`, Less `@var`) as ERROR nodes that swallow the
+        // neighboring declarations — no capturable node exists for a query to
+        // extend, and the two tiers are strictly either/or (every call site is
+        // `TreeSitterHighlighter(language:) ?? SyntaxHighlighter(language:)`, no
+        // layering), so they route to the dedicated regex rule sets instead.
         return m
     }()
 
