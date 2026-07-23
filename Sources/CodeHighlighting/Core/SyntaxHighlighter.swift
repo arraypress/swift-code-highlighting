@@ -68,7 +68,9 @@ public final class SyntaxHighlighter: CodeHighlighter {
         let string = storage.string as NSString
         guard string.length > 0 else { return }
 
-        let start = string.lineRange(for: NSRange(location: editedRange.location, length: 0)).location
+        // Clamp like TreeSitterHighlighter.highlight does: the two tiers are
+        // interchangeable, so a stale range safe against one must not crash the other.
+        let start = string.lineRange(for: NSRange(location: min(editedRange.location, string.length), length: 0)).location
         let end: Int = {
             let e = NSMaxRange(editedRange)
             let clamped = min(e, string.length)

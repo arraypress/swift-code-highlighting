@@ -149,6 +149,36 @@ final class HighlightSessionTests: XCTestCase {
                        "the inserted comment is no identifier — stale pre-shift ranges would paint it cyan")
     }
 
+    func testNoteEditMultiLineInsertionMidDocumentAcrossScannerBlocks() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.python), "Python grammar failed to load")
+        let session = try makeSession("((identifier) @variable.builtin)")
+        // A prefix longer than one 4096-unit scanner block, so the newline scan
+        // crosses a block-read boundary before reaching the edit site — and a
+        // multi-line insertion, so the resumed NEW-text scan must count rows
+        // from the seeded state, not from zero.
+        let prefix = (1...700).map { "v\($0) = \($0)" }.joined(separator: "\n") + "\n"
+        let old = prefix + "beta = 2\ngamma = 3\n"
+        _ = paint(session, old)
+        XCTAssertEqual(session.fullParseCount, 1)
+
+        let oldNS = old as NSString
+        let insertAt = oldNS.range(of: "gamma").location
+        let inserted = "x1 = 7\nx2 = 8\n"
+        let new = oldNS.replacingCharacters(in: NSRange(location: insertAt, length: 0), with: inserted)
+        session.noteEdit(range: NSRange(location: insertAt, length: 0),
+                         replacementLength: (inserted as NSString).length, newText: new)
+        XCTAssertEqual(session.incrementalParseCount, 1, "the edit re-parsed incrementally")
+        XCTAssertEqual(session.fullParseCount, 1, "…and did NOT fall back to a full parse")
+
+        let s = paint(session, new)
+        let ns = new as NSString
+        for word in ["beta", "x1", "x2", "gamma"] {
+            let r = ns.range(of: word)
+            XCTAssertEqual(colorAt(s, r.location), .cyan, "`\(word)` colored at its post-edit position")
+            XCTAssertEqual(colorAt(s, NSMaxRange(r) - 1), .cyan)
+        }
+    }
+
     // MARK: - 3. CJK / emoji edits (the UTF-16×2 byte math through InputEdit)
 
     func testNoteEditWithCJKAndEmojiKeepsByteMathExact() throws {

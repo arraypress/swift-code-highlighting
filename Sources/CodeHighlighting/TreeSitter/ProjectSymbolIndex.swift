@@ -29,6 +29,16 @@ public final class ProjectSymbolIndex {
     /// Whether the initial `build(root:)` has completed and installed its results.
     /// `updateFile(_:)` is a no-op until this is true.
     public private(set) var isBuilt = false
+    /// Whether a `build(root:)` is in flight and not yet installed. While true,
+    /// `updateFile(_:)` calls are recorded in ``pendingUpdates`` instead of
+    /// dropped — the build's enumerator may already have read the file before
+    /// the edit, so a discarded notification would leave stale symbols with
+    /// nothing to ever correct them.
+    private var isBuilding = false
+    /// Files whose change notifications arrived mid-build, keyed by canonical
+    /// path (one replay per file). Replayed through `updateFile(_:)` right
+    /// after the build installs; cleared by `invalidate()`.
+    private var pendingUpdates: [String: URL] = [:]
     private var generation = 0   // bumped by build()/invalidate() so a superseded build's results are discarded
     private let queue = DispatchQueue(label: "sidewatch.symbolindex", qos: .userInitiated)
 
@@ -69,6 +79,7 @@ public final class ProjectSymbolIndex {
     public func build(root: URL, completion: (() -> Void)? = nil) {
         generation += 1
         let gen = generation
+        isBuilding = true
         queue.async { [weak self] in
             guard let self else { return }
             var map: [String: [DefLocation]] = [:]
@@ -101,6 +112,13 @@ public final class ProjectSymbolIndex {
                     self.fileNames = files
                     self.sortedNames = nil   // names replaced wholesale
                     self.isBuilt = true
+                    self.isBuilding = false
+                    // Replay edits the scan raced against: the enumerator may
+                    // have read a file before its mid-build change, so the
+                    // installed snapshot can be stale for exactly these files.
+                    let pending = self.pendingUpdates
+                    self.pendingUpdates = [:]
+                    for url in pending.values { self.updateFile(url) }
                 }
                 completion?()
             }
@@ -108,9 +126,13 @@ public final class ProjectSymbolIndex {
     }
 
     /// Incrementally re-indexes one file (edited/added), or drops it (deleted).
-    /// Cheap enough to call on every disk change. No-op until the full build ran.
+    /// Cheap enough to call on every disk change. No-op until the full build ran,
+    /// except mid-build: those calls are queued and replayed once it installs.
     public func updateFile(_ url: URL) {
-        guard isBuilt else { return }
+        guard isBuilt else {
+            if isBuilding { pendingUpdates[Self.canonicalPath(for: url)] = url }
+            return
+        }
         let path = Self.canonicalPath(for: url)
         queue.async { [weak self] in
             var newDefs: [DefLocation] = []
@@ -216,5 +238,7 @@ public final class ProjectSymbolIndex {
         fileNames = [:]
         sortedNames = nil
         isBuilt = false
+        isBuilding = false
+        pendingUpdates = [:]
     }
 }

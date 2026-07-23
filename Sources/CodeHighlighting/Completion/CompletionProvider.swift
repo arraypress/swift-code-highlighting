@@ -111,12 +111,19 @@ public final class CompletionProvider {
     public func completions(for partial: String, text: String,
                             language: CodeLanguage.Language) -> [CompletionItem] {
         guard !partial.isEmpty else { return [] }
-        if cachedFileSymbols == nil {
+        var fileSymbols = cachedFileSymbols
+        if fileSymbols == nil {
             if let provider = symbolsProvider {
-                // Session-backed: reads the cached syntax tree, no parse.
-                cachedFileSymbols = Self.sortedUniqueItems(provider().map {
+                // Session-backed: reads the cached syntax tree, no parse. An
+                // empty result is used but NOT cached — the session yields []
+                // while its background warm-up parse is still running, and
+                // caching that would pin this tier empty for the unedited
+                // buffer (only noteEdit() clears the cache). Re-querying is a
+                // cached-tree query, cheap per trigger.
+                fileSymbols = Self.sortedUniqueItems(provider().map {
                     CompletionItem(text: $0.name, kind: $0.kind, detail: nil)
                 })
+                if fileSymbols?.isEmpty == false { cachedFileSymbols = fileSymbols }
             } else {
                 // Same cap as the word scan: symbols() runs a full synchronous
                 // tree-sitter parse — a main-thread hang on huge files (whose
@@ -127,6 +134,7 @@ public final class CompletionProvider {
                             CompletionItem(text: $0.name, kind: $0.kind, detail: nil)
                         })
                     : []
+                fileSymbols = cachedFileSymbols
             }
         }
         if cachedBufferWords == nil {
@@ -136,7 +144,7 @@ public final class CompletionProvider {
             CompletionItem(text: $0.name, kind: $0.kind, detail: $0.url.lastPathComponent)
         }
         return Self.rank(partial: partial,
-                         fileSymbols: cachedFileSymbols ?? [],
+                         fileSymbols: fileSymbols ?? [],
                          projectSymbols: project,
                          bufferWords: cachedBufferWords ?? [],
                          builtins: LanguageBuiltins.completions(for: language))

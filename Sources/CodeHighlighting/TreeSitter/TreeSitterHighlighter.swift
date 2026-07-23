@@ -290,18 +290,51 @@ public final class TreeSitterHighlighter: CodeHighlighter {
 
     /// For hover-doc: the definition signature + preceding doc comment for `word`,
     /// if it's defined in `text`. Returns nil when the word isn't a known symbol.
+    /// - Important: performs a fresh full parse of `text` per call. On an open
+    ///   document prefer ``hoverInfo(for:symbols:in:language:)`` with the
+    ///   session's cached symbols; for an already-located definition (e.g. a
+    ///   ``ProjectSymbolIndex`` hit) use ``hoverInfo(for:definedAt:kind:in:language:)``
+    ///   — neither parses.
     public static func hoverInfo(for word: String, in text: String, language: CodeLanguage.Language) -> (kind: SymbolKind, signature: NSAttributedString, doc: String)? {
-        guard word.count > 1, let sym = symbols(in: text, language: language).first(where: { $0.name == word }) else { return nil }
+        guard word.count > 1 else { return nil }
+        return hoverInfo(for: word, symbols: symbols(in: text, language: language), in: text, language: language)
+    }
+
+    /// ``hoverInfo(for:in:language:)`` against pre-fetched `symbols` (e.g.
+    /// ``HighlightSession/symbols(text:)``, a query over the cached tree) — no
+    /// parse. Empty `symbols` (a session still warming up) just yields nil:
+    /// treat that as "no info here", never a reason to fall back to a parse.
+    public static func hoverInfo(for word: String, symbols: [Symbol], in text: String, language: CodeLanguage.Language) -> (kind: SymbolKind, signature: NSAttributedString, doc: String)? {
+        guard word.count > 1, let sym = symbols.first(where: { $0.name == word }) else { return nil }
+        return signatureInfo(kind: sym.kind, at: sym.range.location, in: text as NSString, language: language)
+    }
+
+    /// Hover info for a definition whose site is already known (a
+    /// ``ProjectSymbolIndex`` `DefLocation`): the signature line and doc comment
+    /// are read straight off `text` — no parse, no symbol query. Returns nil
+    /// when `range` no longer holds `word` (the FSEvents-refreshed index can
+    /// briefly lag the file on disk) rather than guessing at a stale site.
+    public static func hoverInfo(for word: String, definedAt range: NSRange, kind: SymbolKind,
+                                 in text: String, language: CodeLanguage.Language) -> (kind: SymbolKind, signature: NSAttributedString, doc: String)? {
         let ns = text as NSString
-        guard sym.range.location <= ns.length else { return nil }
-        let lineRange = ns.lineRange(for: NSRange(location: sym.range.location, length: 0))
+        guard word.count > 1, range.location >= 0, range.length >= 0,
+              NSMaxRange(range) <= ns.length, ns.substring(with: range) == word else { return nil }
+        return signatureInfo(kind: kind, at: range.location, in: ns, language: language)
+    }
+
+    /// Shared tail of the `hoverInfo` variants: the (trimmed) line at `location`
+    /// as a highlighted signature, plus the doc comment above it.
+    private static func signatureInfo(kind: SymbolKind, at location: Int, in ns: NSString,
+                                      language: CodeLanguage.Language) -> (kind: SymbolKind, signature: NSAttributedString, doc: String)? {
+        guard location <= ns.length else { return nil }
+        let lineRange = ns.lineRange(for: NSRange(location: location, length: 0))
         var signature = ns.substring(with: lineRange).trimmingCharacters(in: .whitespacesAndNewlines)
         while signature.hasSuffix("{") || signature.hasSuffix("}") || signature.hasSuffix(";") {
             signature = String(signature.dropLast())
         }
         signature = signature.trimmingCharacters(in: .whitespaces)
         let mono = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
-        return (sym.kind, attributedSnippet(signature, language: language, font: mono), docComment(above: lineRange.location, in: ns, language: language))
+        return (kind, attributedSnippet(signature, language: language, font: mono), docComment(above: lineRange.location, in: ns, language: language))
     }
 
     /// Syntax-highlights a short code snippet (e.g. a hover signature) into an
@@ -692,20 +725,15 @@ public final class TreeSitterHighlighter: CodeHighlighter {
 
     /// Parses the whole of `ns` restricted to `ranges` — one combined document per
     /// injected language. Byte offsets are UTF-16 index × 2 (SwiftTreeSitter parses
-    /// UTF-16LE); points come from a single forward newline scan (column in bytes).
+    /// UTF-16LE); points come from a single forward newline scan (column in bytes),
+    /// block-read via `UTF16NewlineScanner` — this runs per highlight pass, and a
+    /// per-character walk to a late injection site cost an ObjC call per UTF-16 unit.
     private static func combinedParse(_ sub: Grammar, ns: NSString, ranges: [NSRange]) -> MutableTree? {
         let p = Parser()
         try? p.setLanguage(sub.language)
-        var row = 0, lastNL = -1, scan = 0
-        func point(at idx: Int) -> Point {
-            while scan < idx {
-                if ns.character(at: scan) == 0x0A { row += 1; lastNL = scan }
-                scan += 1
-            }
-            return Point(row: row, column: (idx - lastNL - 1) * 2)
-        }
+        var scanner = UTF16NewlineScanner(ns)   // ranges are ascending (mergeAscending)
         p.includedRanges = ranges.map { r in
-            let start = point(at: r.location), end = point(at: NSMaxRange(r))
+            let start = scanner.point(at: r.location), end = scanner.point(at: NSMaxRange(r))
             return TSRange(points: start..<end, bytes: UInt32(r.location * 2)..<UInt32(NSMaxRange(r) * 2))
         }
         return p.parse(ns as String)

@@ -74,6 +74,16 @@ final class CodeHighlightingTests: XCTestCase {
         hl.highlight(storage, in: NSRange(location: 0, length: 0))   // must be a no-op, not a crash
     }
 
+    func testOutOfBoundsEditedRangeIsClampedLikeTheTreeSitterTier() {
+        // The two CodeHighlighter tiers are interchangeable, so a stale range
+        // that TreeSitterHighlighter tolerates (clamped) must not raise
+        // NSRangeException here either.
+        let hl = SyntaxHighlighter(language: .swift, colors: MockColors())
+        let storage = NSTextStorage(string: "let x")
+        hl.highlight(storage, in: NSRange(location: 999, length: 5))
+        XCTAssertEqual(colorAt(storage, 0), .blue, "clamped to the last line and highlighted")
+    }
+
     // MARK: - Strings vs. comments (single left-to-right scan)
 
     func testCommentMarkerInsideStringStaysString() {

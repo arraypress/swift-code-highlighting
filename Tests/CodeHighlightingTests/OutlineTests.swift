@@ -101,6 +101,20 @@ final class OutlineTests: XCTestCase {
         XCTAssertEqual(MarkdownOutline.headings(in: md).map(\.name), ["Real", "After"])
     }
 
+    func testSkipsHeadingsInIndentedCodeBlocks() {
+        // CommonMark: 4+ spaces (or a tab) of indentation is a code block, and
+        // ATX headings allow at most 3 leading spaces.
+        let md = "para\n\n    # not a heading\n\t# tab-indented nope\n\n# Real\n   ### Indented Ok\n"
+        XCTAssertEqual(MarkdownOutline.headings(in: md).map(\.name), ["Real", "Indented Ok"])
+    }
+
+    func testCRLFHeadingNamesHaveNoCarriageReturn() {
+        let md = "# Title\r\nintro\r\n## Sub\r\n"
+        let heads = MarkdownOutline.headings(in: md)
+        XCTAssertEqual(heads.map(\.name), ["Title", "Sub"])
+        XCTAssertEqual(heads.map(\.line), [1, 3])
+    }
+
     func testRequiresSpaceAfterHashes() {
         // "#hashtag" is not a heading; "####### too deep" (7) is not either.
         let md = "#hashtag\n####### too deep\n# Ok\n"

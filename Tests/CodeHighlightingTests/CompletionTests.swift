@@ -164,4 +164,38 @@ final class CompletionTests: XCTestCase {
         // Order: project (mainHandler) → builtin (map) → buffer (maybe).
         XCTAssertEqual(out.map(\.text), ["mainHandler", "map", "maybe"])
     }
+
+    // MARK: - symbolsProvider caching
+
+    func testEmptySymbolsProviderResultIsNotCached() {
+        // The editor's provider yields [] while the session's warm-up parse is
+        // still running; caching that would pin the file-symbol tier empty for
+        // the unedited buffer (only noteEdit clears the cache).
+        let provider = CompletionProvider()
+        var symbols: [Symbol] = []
+        provider.symbolsProvider = { symbols }
+        XCTAssertTrue(provider.completions(for: "qq", text: "", language: .plainText).isEmpty)
+
+        symbols = [Symbol(name: "qqAlpha", kind: .function,
+                          range: NSRange(location: 0, length: 7), line: 1)]
+        let out = provider.completions(for: "qq", text: "", language: .plainText)
+        XCTAssertEqual(out.map(\.text), ["qqAlpha"],
+                       "warm-up's empty tier must not stick without an edit")
+    }
+
+    func testNonEmptySymbolsProviderResultIsCached() {
+        var calls = 0
+        let provider = CompletionProvider()
+        provider.symbolsProvider = {
+            calls += 1
+            return [Symbol(name: "qqAlpha", kind: .function,
+                           range: NSRange(location: 0, length: 7), line: 1)]
+        }
+        _ = provider.completions(for: "qq", text: "", language: .plainText)
+        _ = provider.completions(for: "qq", text: "", language: .plainText)
+        XCTAssertEqual(calls, 1, "a non-empty tier is cached until noteEdit")
+        provider.noteEdit()
+        _ = provider.completions(for: "qq", text: "", language: .plainText)
+        XCTAssertEqual(calls, 2)
+    }
 }

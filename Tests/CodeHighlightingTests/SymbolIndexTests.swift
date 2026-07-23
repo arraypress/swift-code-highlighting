@@ -235,6 +235,31 @@ final class SymbolIndexTests: XCTestCase {
         XCTAssertEqual(ProjectSymbolIndex.canonicalPath(for: privateSpelling), before)
     }
 
+    func testUpdateFileDuringBuildIsReplayedAfterInstall() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.python))
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("a.py")
+        try "def alpha():\n    pass\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let idx = ProjectSymbolIndex()
+        let built = expectation(description: "build completes")
+        idx.build(root: dir) { built.fulfill() }
+        // Mid-build edit: isBuilt is still false here (the install runs on a
+        // later main-queue turn), and the build's enumerator may already have
+        // read the pre-edit file — so this notification must be queued and
+        // replayed after the install, not silently dropped.
+        try "def gamma():\n    pass\n".write(to: file, atomically: true, encoding: .utf8)
+        idx.updateFile(file)
+        XCTAssertFalse(idx.isBuilt)
+        wait(for: [built], timeout: 10)
+
+        XCTAssertTrue(waitUntil { idx.definitions(of: "gamma").count == 1 },
+                      "mid-build edit re-indexed after the install")
+        XCTAssertTrue(waitUntil { idx.definitions(of: "alpha").isEmpty },
+                      "pre-edit symbols corrected")
+    }
+
     func testUpdateFileBeforeBuildIsNoOp() throws {
         try XCTSkipUnless(TreeSitterHighlighter.supports(.python))
         let dir = makeTempDir()
@@ -360,5 +385,37 @@ final class SymbolIndexTests: XCTestCase {
     func testPrefixQueryBeforeBuildIsEmpty() {
         let idx = ProjectSymbolIndex()
         XCTAssertTrue(idx.definitions(matchingPrefix: "any").isEmpty)
+    }
+
+    // MARK: - hoverInfo (the parse-free variants)
+
+    func testHoverInfoPrefetchedSymbolsMatchesParsingVariant() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.python))
+        let text = "# adds things\ndef alpha():\n    pass\n"
+        let syms = TreeSitterHighlighter.symbols(in: text, language: .python)
+        let parsed = try XCTUnwrap(TreeSitterHighlighter.hoverInfo(for: "alpha", in: text, language: .python))
+        let prefetched = try XCTUnwrap(TreeSitterHighlighter.hoverInfo(for: "alpha", symbols: syms,
+                                                                       in: text, language: .python))
+        XCTAssertEqual(prefetched.kind, parsed.kind)
+        XCTAssertEqual(prefetched.signature.string, parsed.signature.string)
+        XCTAssertEqual(prefetched.doc, parsed.doc)
+        XCTAssertNil(TreeSitterHighlighter.hoverInfo(for: "alpha", symbols: [], in: text, language: .python),
+                     "a warming session's empty symbols yield nil, never a parse")
+    }
+
+    func testHoverInfoDefinedAtVerifiesTheSiteStillHoldsTheWord() throws {
+        try XCTSkipUnless(TreeSitterHighlighter.supports(.python))
+        let text = "def alpha():\n    pass\n"
+        let range = (text as NSString).range(of: "alpha")
+        let info = try XCTUnwrap(TreeSitterHighlighter.hoverInfo(for: "alpha", definedAt: range,
+                                                                 kind: .function, in: text, language: .python))
+        XCTAssertEqual(info.kind, .function)
+        XCTAssertEqual(info.signature.string, "def alpha():")
+        // A stale index site (the range no longer holds the word, or is out of
+        // bounds) yields nil rather than a guessed signature.
+        XCTAssertNil(TreeSitterHighlighter.hoverInfo(for: "alpha", definedAt: NSRange(location: 0, length: 5),
+                                                     kind: .function, in: text, language: .python))
+        XCTAssertNil(TreeSitterHighlighter.hoverInfo(for: "alpha", definedAt: NSRange(location: 500, length: 5),
+                                                     kind: .function, in: text, language: .python))
     }
 }
